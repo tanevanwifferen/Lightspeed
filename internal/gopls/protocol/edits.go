@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/owner/lightspeed/internal/gopls/diff"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/diff"
 )
 
 // EditsFromDiffEdits converts diff.Edits to a non-nil slice of LSP TextEdits.

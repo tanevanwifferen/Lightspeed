@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/owner/lightspeed/internal/gopls/protocol"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/protocol"
 )
 
 // parseSpan returns the location represented by the input.

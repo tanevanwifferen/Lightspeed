@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/owner/lightspeed/internal/client"
-	"github.com/owner/lightspeed/internal/render"
+	"github.com/tanevanwifferen/Lightspeed/internal/client"
+	"github.com/tanevanwifferen/Lightspeed/internal/render"
 )
 
 // defaultServerCommand is the hardcoded M0 server (PLAN §8 M0: "raw

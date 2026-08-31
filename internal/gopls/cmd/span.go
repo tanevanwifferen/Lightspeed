@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/owner/lightspeed/internal/gopls/protocol"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/protocol"
 )
 
 // A span represents a range of text within a source file.  The start

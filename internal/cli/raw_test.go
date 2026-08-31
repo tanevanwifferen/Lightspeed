@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/owner/lightspeed/internal/fakeserver"
-	"github.com/owner/lightspeed/internal/render"
+	"github.com/tanevanwifferen/Lightspeed/internal/fakeserver"
+	"github.com/tanevanwifferen/Lightspeed/internal/render"
 )
 
 // The raw end-to-end test needs a language server subprocess without

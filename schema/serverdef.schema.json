@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/owner/lightspeed/schema/serverdef.schema.json",
+  "$id": "https://github.com/tanevanwifferen/Lightspeed/schema/serverdef.schema.json",
   "title": "Lightspeed server definition",
   "description": "Placeholder schema for the declarative server definitions of PLAN.md §6. Fleshed out in M4; the shape below mirrors the gopls example in the plan.",
   "type": "object",

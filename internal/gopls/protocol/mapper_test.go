@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/owner/lightspeed/internal/gopls/protocol"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/protocol"
 )
 
 // This file tests Mapper's logic for converting between offsets,

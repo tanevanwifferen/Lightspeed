@@ -16,7 +16,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/owner/lightspeed/internal/gopls/pathutil"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/pathutil"
 )
 
 // A DocumentURI is the URI of a client editor document.

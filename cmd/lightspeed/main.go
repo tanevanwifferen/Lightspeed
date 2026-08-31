@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"github.com/owner/lightspeed/internal/cli"
+	"github.com/tanevanwifferen/Lightspeed/internal/cli"
 )
 
 func main() {

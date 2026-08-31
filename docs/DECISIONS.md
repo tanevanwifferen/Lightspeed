@@ -4,7 +4,7 @@ Running log of decisions that resolve open questions from PLAN.md.
 
 ## D1 — Module path (PLAN §9.1)
 
-**Decision:** `github.com/owner/lightspeed`.
+**Decision:** `github.com/tanevanwifferen/Lightspeed`.
 
 There is no remote yet; GitHub is the assumed eventual host. The path is
 cheap to change before the first public release (single `go.mod` line plus

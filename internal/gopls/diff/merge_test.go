@@ -7,7 +7,7 @@ package diff_test
 import (
 	"testing"
 
-	"github.com/owner/lightspeed/internal/gopls/diff"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/diff"
 )
 
 func TestMerge(t *testing.T) {

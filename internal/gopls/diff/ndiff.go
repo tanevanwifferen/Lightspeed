@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/owner/lightspeed/internal/gopls/diff/lcs"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/diff/lcs"
 )
 
 // Lines computes differences between two strings. All edits are at line boundaries.

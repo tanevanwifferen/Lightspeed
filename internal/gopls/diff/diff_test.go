@@ -15,8 +15,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/owner/lightspeed/internal/gopls/diff"
-	"github.com/owner/lightspeed/internal/gopls/diff/difftest"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/diff"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/diff/difftest"
 )
 
 func TestApply(t *testing.T) {

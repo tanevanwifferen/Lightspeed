@@ -65,8 +65,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/owner/lightspeed/internal/gopls/bug"
-	"github.com/owner/lightspeed/internal/gopls/safetoken"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/bug"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/safetoken"
 )
 
 // A Mapper wraps the content of a file and provides mapping

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/owner/lightspeed/internal/render"
+	"github.com/tanevanwifferen/Lightspeed/internal/render"
 )
 
 // Exit codes, PLAN §4.
