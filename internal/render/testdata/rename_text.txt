@@ -1,0 +1,8 @@
+internal/fixture/fixture.go:4:13: 利用者名
+internal/fixture/fixture.go:7:9: 利用者名
+internal/store/legacy.go:1:1: delete file
+internal/store/old.go:1:1: rename to internal/store/new.go
+internal/store/old.go:3:16: UserRepository
+internal/store/repository.go:1:1: create file
+internal/store/user.go:4:6: UserRepository
+internal/store/user.go:8:10: UserRepository

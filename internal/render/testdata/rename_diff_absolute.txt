@@ -1,0 +1,13 @@
+--- /w/internal/fixture/fixture.go
++++ /w/internal/fixture/fixture.go
+@@ -1,8 +1,8 @@
+ package fixture
+ 
+ // 日本語のコメント: ユーザー名 を返す。
+-var 名前, ユーザー名 = "名", "🎉 party"
++var 名前, 利用者名 = "名", "🎉 party"
+ 
+ func 使う() string {
+-	return ユーザー名 + "🎉"
++	return 利用者名 + "🎉"
+ }

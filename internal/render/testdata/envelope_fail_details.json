@@ -1,0 +1,1 @@
+{"version":1,"ok":false,"error":{"code":"server_not_installed","message":"gopls is not on PATH","data":{"install":"mise use -g go:golang.org/x/tools/gopls@v0.23.0"}}}

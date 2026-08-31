@@ -1,0 +1,24 @@
+# changes truncated: showing 2 of 5 changes (--limit 2)
+diff --git a/internal/fixture/fixture.go b/internal/fixture/fixture.go
+--- a/internal/fixture/fixture.go
++++ b/internal/fixture/fixture.go
+@@ -1,8 +1,8 @@
+ package fixture
+ 
+ // 日本語のコメント: ユーザー名 を返す。
+-var 名前, ユーザー名 = "名", "🎉 party"
++var 名前, 利用者名 = "名", "🎉 party"
+ 
+ func 使う() string {
+-	return ユーザー名 + "🎉"
++	return 利用者名 + "🎉"
+ }
+diff --git a/internal/store/legacy.go b/internal/store/legacy.go
+deleted file mode 100644
+--- a/internal/store/legacy.go
++++ /dev/null
+@@ -1,4 +0,0 @@
+-package store
+-
+-// Deprecated: use UserRepository.
+-type LegacyRepo struct{}

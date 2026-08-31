@@ -1,0 +1,181 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "lightspeed",
+          "informationUri": "https://github.com/tanevanwifferen/Lightspeed",
+          "version": "0.0.0-test",
+          "rules": [
+            {
+              "id": "lightspeed/diagnostic"
+            },
+            {
+              "id": "revive",
+              "shortDescription": {
+                "text": "revive"
+              }
+            },
+            {
+              "id": "compiler/UndeclaredName",
+              "shortDescription": {
+                "text": "compiler UndeclaredName"
+              }
+            },
+            {
+              "id": "staticcheck/ST1016",
+              "shortDescription": {
+                "text": "staticcheck ST1016"
+              }
+            }
+          ]
+        }
+      },
+      "columnKind": "utf16CodeUnits",
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": "file:///w/"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "lightspeed/diagnostic",
+          "ruleIndex": 0,
+          "level": "note",
+          "message": {
+            "text": "ユーザー名 is never reassigned; consider a constant"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/fixture/fixture.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 4,
+                  "startColumn": 9,
+                  "endLine": 4,
+                  "endColumn": 14,
+                  "snippet": {
+                    "text": "var 名前, ユーザー名 = \"名\", \"🎉 party\""
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "revive",
+          "ruleIndex": 1,
+          "level": "note",
+          "message": {
+            "text": "exported function 使う should have a comment"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/fixture/fixture.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 6,
+                  "startColumn": 6,
+                  "endLine": 6,
+                  "endColumn": 8,
+                  "snippet": {
+                    "text": "func 使う() string {"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "compiler/UndeclaredName",
+          "ruleIndex": 2,
+          "level": "error",
+          "message": {
+            "text": "undefined: DB"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/store/user.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 5,
+                  "startColumn": 6,
+                  "endLine": 5,
+                  "endColumn": 8,
+                  "snippet": {
+                    "text": "\tdb *DB"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "staticcheck/ST1016",
+          "ruleIndex": 3,
+          "level": "warning",
+          "message": {
+            "text": "parameter id is unused"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/store/user.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 8,
+                  "startColumn": 24,
+                  "endLine": 8,
+                  "endColumn": 30,
+                  "snippet": {
+                    "text": "func (r *UserRepo) Get(id int) *User {"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "compiler/UndeclaredName",
+          "ruleIndex": 2,
+          "level": "error",
+          "message": {
+            "text": "undefined: User"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/store/user.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 8,
+                  "startColumn": 33,
+                  "endLine": 8,
+                  "endColumn": 37,
+                  "snippet": {
+                    "text": "func (r *UserRepo) Get(id int) *User {"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
