@@ -1,0 +1,106 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "lightspeed",
+          "informationUri": "https://github.com/tanevanwifferen/Lightspeed",
+          "rules": [
+            {
+              "id": "lightspeed/diagnostic"
+            },
+            {
+              "id": "revive",
+              "shortDescription": {
+                "text": "revive"
+              }
+            }
+          ]
+        }
+      },
+      "columnKind": "utf16CodeUnits",
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": "file:///w/"
+        }
+      },
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "toolExecutionNotifications": [
+            {
+              "level": "warning",
+              "message": {
+                "text": "diagnostics truncated: showing 2 of 5 diagnostics (--limit 2)"
+              }
+            }
+          ]
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "lightspeed/diagnostic",
+          "ruleIndex": 0,
+          "level": "note",
+          "message": {
+            "text": "ユーザー名 is never reassigned; consider a constant"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/fixture/fixture.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 4,
+                  "startColumn": 9,
+                  "endLine": 4,
+                  "endColumn": 14,
+                  "snippet": {
+                    "text": "var 名前, ユーザー名 = \"名\", \"🎉 party\""
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "revive",
+          "ruleIndex": 1,
+          "level": "note",
+          "message": {
+            "text": "exported function 使う should have a comment"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/fixture/fixture.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 6,
+                  "startColumn": 6,
+                  "endLine": 6,
+                  "endColumn": 8,
+                  "snippet": {
+                    "text": "func 使う() string {"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "truncated": true,
+        "count": 2,
+        "total": 5,
+        "limit": 2
+      }
+    }
+  ]
+}

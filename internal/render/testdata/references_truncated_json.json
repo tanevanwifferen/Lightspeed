@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "ok": true,
+  "data": {
+    "kind": "references",
+    "results": [
+      {
+        "uri": "file:///w/internal/fixture/fixture.go",
+        "path": "internal/fixture/fixture.go",
+        "range": {
+          "start": {
+            "line": 3,
+            "character": 4
+          },
+          "end": {
+            "line": 3,
+            "character": 6
+          }
+        },
+        "start": {
+          "line": 4,
+          "column": 5,
+          "offset": 79
+        },
+        "end": {
+          "line": 4,
+          "column": 11,
+          "offset": 85
+        },
+        "text": "var 名前, ユーザー名 = \"名\", \"🎉 party\"",
+        "kind": "declaration"
+      },
+      {
+        "uri": "file:///w/internal/fixture/fixture.go",
+        "path": "internal/fixture/fixture.go",
+        "range": {
+          "start": {
+            "line": 3,
+            "character": 8
+          },
+          "end": {
+            "line": 3,
+            "character": 13
+          }
+        },
+        "start": {
+          "line": 4,
+          "column": 13,
+          "offset": 87
+        },
+        "end": {
+          "line": 4,
+          "column": 28,
+          "offset": 102
+        },
+        "text": "var 名前, ユーザー名 = \"名\", \"🎉 party\"",
+        "kind": "declaration"
+      }
+    ],
+    "count": 2,
+    "total": 5,
+    "truncated": true,
+    "limit": 2
+  },
+  "warnings": [
+    "references truncated: showing 2 of 5 references (--limit 2)"
+  ]
+}

@@ -1,0 +1,5 @@
+internal/fixture/fixture.go:4:13: hint: ユーザー名 is never reassigned; consider a constant
+internal/fixture/fixture.go:6:6: info: exported function 使う should have a comment [revive]
+internal/store/user.go:5:6: error: undefined: DB [compiler:UndeclaredName]
+internal/store/user.go:8:24: warning: parameter id is unused [staticcheck:ST1016]
+internal/store/user.go:8:33: error: undefined: User [compiler:UndeclaredName]

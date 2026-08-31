@@ -1,0 +1,5 @@
+internal/fixture/fixture.go:4:5: var 名前, ユーザー名 = "名", "🎉 party"
+internal/fixture/fixture.go:4:13: var 名前, ユーザー名 = "名", "🎉 party"
+internal/fixture/fixture.go:7:9: 	return ユーザー名 + "🎉"
+internal/store/user.go:4:6: type UserRepo struct {
+internal/store/user.go:8:10: func (r *UserRepo) Get(id int) *User {

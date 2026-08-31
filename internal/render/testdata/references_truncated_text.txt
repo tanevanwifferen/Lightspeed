@@ -1,0 +1,3 @@
+internal/fixture/fixture.go:4:5: var 名前, ユーザー名 = "名", "🎉 party"
+internal/fixture/fixture.go:4:13: var 名前, ユーザー名 = "名", "🎉 party"
+# references truncated: showing 2 of 5 references (--limit 2)

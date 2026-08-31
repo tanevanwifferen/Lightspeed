@@ -1,0 +1,64 @@
+diff --git a/internal/fixture/fixture.go b/internal/fixture/fixture.go
+--- a/internal/fixture/fixture.go
++++ b/internal/fixture/fixture.go
+@@ -1,8 +1,8 @@
+ package fixture
+ 
+ // 日本語のコメント: ユーザー名 を返す。
+-var 名前, ユーザー名 = "名", "🎉 party"
++var 名前, 利用者名 = "名", "🎉 party"
+ 
+ func 使う() string {
+-	return ユーザー名 + "🎉"
++	return 利用者名 + "🎉"
+ }
+diff --git a/internal/store/legacy.go b/internal/store/legacy.go
+deleted file mode 100644
+--- a/internal/store/legacy.go
++++ /dev/null
+@@ -1,4 +0,0 @@
+-package store
+-
+-// Deprecated: use UserRepository.
+-type LegacyRepo struct{}
+diff --git a/internal/store/old.go b/internal/store/old.go
+deleted file mode 100644
+--- a/internal/store/old.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-package store
+-
+-func helper(r *UserRepo) {}
+diff --git a/internal/store/new.go b/internal/store/new.go
+new file mode 100644
+--- /dev/null
++++ b/internal/store/new.go
+@@ -0,0 +1,3 @@
++package store
++
++func helper(r *UserRepository) {}
+diff --git a/internal/store/repository.go b/internal/store/repository.go
+new file mode 100644
+--- /dev/null
++++ b/internal/store/repository.go
+@@ -0,0 +1,4 @@
++package store
++
++// UserRepository is the renamed UserRepo.
++type UserRepository = UserRepo
+diff --git a/internal/store/user.go b/internal/store/user.go
+--- a/internal/store/user.go
++++ b/internal/store/user.go
+@@ -1,10 +1,10 @@
+ package store
+ 
+ // UserRepo stores users.
+-type UserRepo struct {
++type UserRepository struct {
+ 	db *DB
+ }
+ 
+-func (r *UserRepo) Get(id int) *User {
++func (r *UserRepository) Get(id int) *User {
+ 	return r.db.user(id)
+ }
