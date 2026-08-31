@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -14,6 +14,10 @@ import (
 type Server struct {
 	*Conn
 	cmd *exec.Cmd
+
+	waitOnce sync.Once
+	waitDone chan struct{}
+	waitErr  error
 }
 
 // StartCommand launches argv[0] with the remaining arguments as a
@@ -40,27 +44,13 @@ func StartCommand(argv []string, stderr io.Writer) (*Server, error) {
 	return &Server{Conn: NewConn(stdout, stdin), cmd: cmd}, nil
 }
 
-// Initialize performs the LSP initialize handshake: an `initialize`
-// request with minimal client capabilities followed by the
-// `initialized` notification. It returns the raw InitializeResult.
+// Initialize performs the LSP initialize handshake with lightspeed's
+// default client capabilities: an `initialize` request followed by
+// the `initialized` notification. It returns the raw
+// InitializeResult. Use Connect instead when you want capability
+// recording, progress tracking and the readiness gate.
 func (s *Server) Initialize(ctx context.Context, rootDir string) (json.RawMessage, error) {
-	rootURI := ""
-	if rootDir != "" {
-		rootURI = "file://" + rootDir
-	}
-	params := map[string]any{
-		"processId":    os.Getpid(),
-		"rootUri":      rootURI,
-		"capabilities": map[string]any{},
-	}
-	result, err := s.Call(ctx, "initialize", params)
-	if err != nil {
-		return nil, fmt.Errorf("initialize: %w", err)
-	}
-	if err := s.Notify("initialized", map[string]any{}); err != nil {
-		return nil, fmt.Errorf("initialized: %w", err)
-	}
-	return result, nil
+	return initialize(ctx, s.Conn, SessionOptions{RootDir: rootDir})
 }
 
 // Shutdown performs the polite LSP exit sequence (shutdown request,
@@ -68,19 +58,30 @@ func (s *Server) Initialize(ctx context.Context, rootDir string) (json.RawMessag
 // not leave within the context deadline.
 func (s *Server) Shutdown(ctx context.Context) error {
 	// Best-effort politeness; a server that already died fails the
-	// call, and the kill below still reaps it.
-	if _, err := s.Call(ctx, "shutdown", nil); err == nil {
-		_ = s.Notify("exit", nil)
-	}
+	// call, and the reap below still collects it.
+	_ = shutdown(ctx, s.Conn)
+	return s.Wait(ctx)
+}
 
-	waited := make(chan error, 1)
-	go func() { waited <- s.cmd.Wait() }()
+// Wait reaps the subprocess, killing it if it does not leave within
+// the context deadline or three seconds, whichever comes first. It is
+// the half of Shutdown that a caller which already closed the session
+// itself still needs.
+func (s *Server) Wait(ctx context.Context) error {
+	s.waitOnce.Do(func() {
+		s.waitDone = make(chan struct{})
+		go func() {
+			s.waitErr = s.cmd.Wait()
+			close(s.waitDone)
+		}()
+	})
 	select {
-	case err := <-waited:
-		return err
+	case <-s.waitDone:
+		return s.waitErr
 	case <-ctx.Done():
 	case <-time.After(3 * time.Second):
 	}
 	_ = s.cmd.Process.Kill()
-	return <-waited
+	<-s.waitDone
+	return s.waitErr
 }

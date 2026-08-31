@@ -1,7 +1,8 @@
 // Package client implements the LSP side of lightspeed: a minimal
-// JSON-RPC 2.0 connection with LSP base-protocol framing, plus the
-// initialize/shutdown lifecycle. Capability tracking, $/progress and
-// readiness gating (PLAN §5.2) arrive in M1.
+// JSON-RPC 2.0 connection with LSP base-protocol framing, the
+// initialize/shutdown lifecycle, capability recording with a guard
+// against uncapabilitied methods (PLAN §5.4), $/progress tracking and
+// the readiness gate of PLAN §5.2.
 package client
 
 import (
@@ -31,6 +32,7 @@ func (e *RPCError) Error() string {
 // JSON-RPC 2.0 error codes used by this client.
 const (
 	codeMethodNotFound = -32601
+	codeInternalError  = -32603
 )
 
 // message is the wire form of any JSON-RPC 2.0 message.
@@ -47,14 +49,34 @@ type message struct {
 // response arrived.
 var ErrConnClosed = errors.New("jsonrpc: connection closed")
 
+// ErrMethodNotFound may be returned by a RequestHandler to answer a
+// server-to-client request with JSON-RPC's MethodNotFound.
+var ErrMethodNotFound = errors.New("jsonrpc: method not found")
+
+// RequestHandler answers a server-to-client request. Returning a nil
+// result answers with JSON null; returning ErrMethodNotFound (or any
+// error) answers with an error response. Handlers run on the read
+// loop, so they must not block and must never call Conn.Call.
+type RequestHandler func(ctx context.Context, method string, params json.RawMessage) (any, error)
+
+// NotificationHandler observes a server notification ($/progress,
+// window/logMessage, textDocument/publishDiagnostics, …). It runs on
+// the read loop and must not block.
+type NotificationHandler func(method string, params json.RawMessage)
+
 // Conn is a JSON-RPC 2.0 connection over a byte stream with LSP
 // base-protocol framing (Content-Length headers). It supports client
-// requests and notifications; incoming server requests are refused
-// with MethodNotFound and incoming server notifications are dropped,
-// which is all the M0 `raw` command needs.
+// requests and notifications. Incoming server requests are refused
+// with MethodNotFound and incoming server notifications are dropped
+// unless a handler is installed with SetRequestHandler /
+// SetNotificationHandler; Session installs handlers for progress.
 type Conn struct {
 	w       io.Writer
 	writeMu sync.Mutex
+
+	handlerMu      sync.RWMutex
+	onRequest      RequestHandler
+	onNotification NotificationHandler
 
 	mu      sync.Mutex
 	nextID  int64
@@ -80,6 +102,30 @@ func NewConn(r io.Reader, w io.Writer) *Conn {
 // Done is closed when the read loop has exited (server hung up or the
 // connection failed).
 func (c *Conn) Done() <-chan struct{} { return c.done }
+
+// SetRequestHandler installs the handler for server-to-client
+// requests, replacing any previous one. A nil handler restores the
+// default: refuse with MethodNotFound.
+func (c *Conn) SetRequestHandler(h RequestHandler) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.onRequest = h
+}
+
+// SetNotificationHandler installs the handler for server
+// notifications, replacing any previous one. A nil handler restores
+// the default: drop them.
+func (c *Conn) SetNotificationHandler(h NotificationHandler) {
+	c.handlerMu.Lock()
+	defer c.handlerMu.Unlock()
+	c.onNotification = h
+}
+
+func (c *Conn) handlers() (RequestHandler, NotificationHandler) {
+	c.handlerMu.RLock()
+	defer c.handlerMu.RUnlock()
+	return c.onRequest, c.onNotification
+}
 
 // Call sends a request and waits for the matching response or for ctx
 // to be done. A server-reported error is returned as *RPCError.
@@ -183,15 +229,14 @@ func (c *Conn) readLoop(r *bufio.Reader) {
 			if ch != nil {
 				ch <- msg
 			}
-		case msg.ID != nil: // server-to-client request: refuse politely
-			resp := &message{JSONRPC: "2.0", ID: msg.ID, Error: &RPCError{
-				Code:    codeMethodNotFound,
-				Message: fmt.Sprintf("method %q not supported by lightspeed client", msg.Method),
-			}}
-			if werr := c.write(resp); werr != nil {
+		case msg.ID != nil: // server-to-client request
+			if werr := c.answer(msg); werr != nil {
 				err = werr
 			}
-		default: // server notification: dropped in M0
+		default: // server notification
+			if _, onNotification := c.handlers(); onNotification != nil {
+				onNotification(msg.Method, msg.Params)
+			}
 		}
 		if err != nil {
 			break
@@ -209,6 +254,43 @@ func (c *Conn) readLoop(r *bufio.Reader) {
 	}
 	c.mu.Unlock()
 	close(c.done)
+}
+
+// answer replies to a server-to-client request, using the installed
+// handler if there is one and refusing politely if there is not.
+func (c *Conn) answer(msg *message) error {
+	onRequest, _ := c.handlers()
+	resp := &message{JSONRPC: "2.0", ID: msg.ID}
+	if onRequest == nil {
+		resp.Error = &RPCError{
+			Code:    codeMethodNotFound,
+			Message: fmt.Sprintf("method %q not supported by lightspeed client", msg.Method),
+		}
+		return c.write(resp)
+	}
+	result, err := onRequest(context.Background(), msg.Method, msg.Params)
+	switch {
+	case err == nil:
+		raw, merr := marshalParams(result)
+		if merr != nil {
+			resp.Error = &RPCError{Code: codeInternalError, Message: merr.Error()}
+			break
+		}
+		if raw == nil {
+			raw = json.RawMessage("null")
+		}
+		resp.Result = raw
+	case errors.Is(err, ErrMethodNotFound):
+		resp.Error = &RPCError{Code: codeMethodNotFound, Message: err.Error()}
+	default:
+		var rpcErr *RPCError
+		if errors.As(err, &rpcErr) {
+			resp.Error = rpcErr
+		} else {
+			resp.Error = &RPCError{Code: codeInternalError, Message: err.Error()}
+		}
+	}
+	return c.write(resp)
 }
 
 func (c *Conn) closeErr() error {

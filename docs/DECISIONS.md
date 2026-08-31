@@ -44,3 +44,43 @@ CLI at itself, and is M0 scaffolding — real server resolution is M4
 `span`/`point`/`parseSpan`; its own vendored test exercises it. An exported
 wrapper API belongs to `internal/cli` span parsing in M1 — deciding the
 exported surface now, before there is a caller, would be guessing.
+
+## D6 — Readiness rules and what "authoritative" means (PLAN §5.2)
+
+`internal/client.Gate` accepts an answer under exactly four rules, in order:
+
+1. progress drained and the answer is non-empty (first attempt, no waiting);
+2. progress drained and the answer was stable for 750ms — required before an
+   *empty* answer is believed;
+3. the server never sent `$/progress` at all (500ms grace) and the answer was
+   stable for 750ms;
+4. progress was announced but never drained, has been silent for 750ms, and a
+   *non-empty* answer was stable for 750ms.
+
+Rules 3 and 4 attach a warning to the envelope, because their readiness is
+inferred rather than observed. An empty answer never qualifies under rule 4:
+"no references" from a server with unfinished work is precisely the dangerous
+case. Anything else is a `*NotReadyError`, exit 5.
+
+Deliberate consequences:
+
+- A server that never speaks the progress protocol *can* return an empty
+  answer (rule 3). Refusing that would make lightspeed useless against every
+  server without progress support; the warning is the honest half-measure.
+- While a server is actively reporting progress the request is not issued at
+  all — its answer could only be discarded.
+- `ContentModified` (-32801) and `ServerCancelled` (-32802) are treated as
+  readiness signals, not failures: they are what a server sends when its state
+  moved under the request, and they reset the stability window.
+- The timeout is per query, not per session, so a daemon-pooled session
+  (PLAN §3) does not hand its second query an already-expired budget.
+
+## D7 — Exit codes travel on the error, not in a shared enum
+
+Errors from `internal/client` carry `ExitCode() int` (5 for `*NotReadyError`,
+3 for `*UnsupportedMethodError`, 1 for a server-reported `*RPCError`) and
+`Code() string` for the envelope's machine code. The CLI maps any error with a
+type assertion on an anonymous `interface{ ExitCode() int }`, so the exit-code
+taxonomy of PLAN §4 stays in `internal/cli` and `internal/client` does not
+import it. `errors.Is` works too, against `ErrNotReady` and
+`ErrUnsupportedMethod`.
