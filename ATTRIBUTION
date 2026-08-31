@@ -1,0 +1,69 @@
+Attribution for vendored code
+=============================
+
+The packages under internal/gopls/ contain code copied, with minimal
+adaptation, from the Go tools repository (https://go.googlesource.com/tools,
+mirrored at https://github.com/golang/tools), written by The Go Authors and
+distributed under the BSD-3-Clause license reproduced below.
+
+Provenance:
+
+  golang.org/x/tools/gopls @ v0.23.0
+    internal/protocol/mapper.go               -> internal/gopls/protocol/mapper.go
+    internal/protocol/mapper_test.go          -> internal/gopls/protocol/mapper_test.go
+    internal/protocol/span.go                 -> internal/gopls/protocol/span.go
+    internal/protocol/edits.go                -> internal/gopls/protocol/edits.go
+    internal/protocol/tsdocument_changes.go   -> internal/gopls/protocol/tsdocument_changes.go
+    internal/protocol/uri.go                  -> internal/gopls/protocol/uri.go
+    internal/protocol/tsprotocol.go (excerpt) -> internal/gopls/protocol/types.go
+    internal/protocol/tsjson.go (excerpt)     -> internal/gopls/protocol/types.go
+    internal/cmd/span.go                      -> internal/gopls/cmd/span.go
+    internal/cmd/parsespan.go                 -> internal/gopls/cmd/parsespan.go
+    internal/cmd/spanformat_test.go           -> internal/gopls/cmd/spanformat_test.go
+    internal/util/safetoken/safetoken.go      -> internal/gopls/safetoken/safetoken.go
+    internal/util/pathutil/util.go            -> internal/gopls/pathutil/util.go
+    internal/util/bug (interface only)        -> internal/gopls/bug/bug.go (reimplemented shim)
+
+  golang.org/x/tools @ v0.47.1-0.20260707181000-a299dadba899
+    (the version required by gopls v0.23.0)
+    internal/diff/                            -> internal/gopls/diff/
+    internal/diff/lcs/                        -> internal/gopls/diff/lcs/
+    internal/diff/difftest/                   -> internal/gopls/diff/difftest/
+
+Adaptations are limited to: rewriting import paths to
+github.com/owner/lightspeed/internal/gopls/..., extracting the small set of
+generated LSP type declarations needed by the copied files into
+protocol/types.go, omitting SelectCompletionTextEdit from edits.go (depends
+on completion types out of scope here), replacing a testenv.NeedsTool call
+with an exec.LookPath skip in diff_test.go, and reimplementing the bug
+package as a trivial shim.
+
+----------------------------------------------------------------------
+
+Copyright 2009 The Go Authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google LLC nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

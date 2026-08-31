@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/owner/lightspeed/schema/serverdef.schema.json",
+  "title": "Lightspeed server definition",
+  "description": "Placeholder schema for the declarative server definitions of PLAN.md §6. Fleshed out in M4; the shape below mirrors the gopls example in the plan.",
+  "type": "object",
+  "required": ["schema_version", "name"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "activation": {
+      "type": "object",
+      "properties": {
+        "languages": { "type": "array", "items": { "type": "string" } },
+        "globs": { "type": "array", "items": { "type": "string" } },
+        "root_markers": { "type": "array", "items": { "type": "string" } },
+        "priority": { "type": "integer" }
+      }
+    },
+    "server": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "transport": { "enum": ["stdio"] },
+        "initialization_options": { "type": "object" },
+        "settings": { "type": "object" }
+      }
+    },
+    "install": {
+      "type": "object",
+      "properties": {
+        "mise": { "type": "string" }
+      }
+    }
+  }
+}
