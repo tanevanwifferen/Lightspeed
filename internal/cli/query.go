@@ -191,7 +191,7 @@ func (q *locationQuery) queryContext() (context.Context, context.CancelFunc) {
 func locationCommand(e *env, c *command, args []string) int {
 	name := c.Name
 	var declaration bool
-	common, positional, err := parseFlags(e, c, args, 1, func(fs *flag.FlagSet) {
+	common, sf, locArg, _, err := parseLocationFlags(e, c, args, 0, func(fs *flag.FlagSet) {
 		if name == "references" {
 			// gopls spells this -d; the long form is here because an
 			// agent writing a command line reaches for the readable
@@ -211,7 +211,12 @@ func locationCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	q, cleanup, err := prepare(e, common, positional[0])
+	locArg, warnings, err := e.location(common, sf, locArg)
+	if err != nil {
+		return e.fail(err)
+	}
+
+	q, cleanup, err := prepare(e, common, locArg)
 	defer cleanup()
 	if err != nil {
 		return e.fail(err)
@@ -233,9 +238,10 @@ func locationCommand(e *env, c *command, args []string) int {
 	if err != nil {
 		return e.fail(err)
 	}
-	rs, warnings := locationSet(q.session, name, locs)
+	rs, locWarnings := locationSet(q.session, name, locs)
 	rs.Sort()
-	return e.writeResults(format, rs, common.renderOptions(append(res.Warnings, warnings...)))
+	warnings = append(warnings, res.Warnings...)
+	return e.writeResults(format, rs, common.renderOptions(append(warnings, locWarnings...)))
 }
 
 // hoverCommand implements `lightspeed hover <loc>`: the signature and
@@ -246,7 +252,7 @@ func locationCommand(e *env, c *command, args []string) int {
 // carries the markdown verbatim. Nothing is truncated: a hover is one
 // result, and the token discipline of PLAN §4 is about result counts.
 func hoverCommand(e *env, c *command, args []string) int {
-	common, positional, err := parseFlags(e, c, args, 1, nil)
+	common, sf, locArg, _, err := parseLocationFlags(e, c, args, 0, nil)
 	if err != nil {
 		return e.flagError(err)
 	}
@@ -258,7 +264,12 @@ func hoverCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	q, cleanup, err := prepare(e, common, positional[0])
+	locArg, warnings, err := e.location(common, sf, locArg)
+	if err != nil {
+		return e.fail(err)
+	}
+
+	q, cleanup, err := prepare(e, common, locArg)
 	defer cleanup()
 	if err != nil {
 		return e.fail(err)
@@ -291,5 +302,5 @@ func hoverCommand(e *env, c *command, args []string) int {
 		}
 		rs.Results = append(rs.Results, render.Result{Span: span, Kind: "hover", Label: text})
 	}
-	return e.writeResults(format, rs, common.renderOptions(res.Warnings))
+	return e.writeResults(format, rs, common.renderOptions(append(warnings, res.Warnings...)))
 }

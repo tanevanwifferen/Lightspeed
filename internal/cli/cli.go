@@ -25,6 +25,7 @@ package cli
 
 import (
 	"io"
+	"os"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/render"
 )
@@ -47,7 +48,15 @@ const (
 // diagnostics and server logs to stderr, so that stdout can be parsed
 // without filtering.
 func Main(args []string, stdout, stderr io.Writer) int {
-	e := &env{stdout: stdout, stderr: stderr}
+	return MainWithStdin(args, os.Stdin, stdout, stderr)
+}
+
+// MainWithStdin is Main with the input stream named explicitly. Only
+// `batch` reads it — it is the whole point of that command — and every
+// other command ignores it, so the ordinary entry point can keep the
+// two-stream signature it has had since M0.
+func MainWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	e := &env{stdin: stdin, stdout: stdout, stderr: stderr}
 	if len(args) == 0 {
 		writeUsage(stderr)
 		return e.usagef("missing subcommand (try: lightspeed help)")

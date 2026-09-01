@@ -93,8 +93,13 @@ func runFakeServer() int {
 		}
 	}
 	trace := newTracer(os.Getenv(traceEnv))
-	opts.OnNotification = func(_ *fakeserver.Conn, method string, params json.RawMessage) {
+	// publisher is M5's half of the script (m5scenario_test.go): a
+	// server that pushes diagnostics in reply to didOpen. It does
+	// nothing unless the scenario asked for diagnostics.
+	publisher := newDiagnosticsScript(os.Getenv(diagnosticsEnv))
+	opts.OnNotification = func(c *fakeserver.Conn, method string, params json.RawMessage) {
 		trace.record(method, params)
+		publisher.handle(c, method, params)
 	}
 	opts.Methods = map[string]fakeserver.Method{}
 	for method, result := range results {
@@ -114,6 +119,10 @@ func runFakeServer() int {
 			return result, nil
 		}
 	}
+
+	// The call-graph handlers answer per item rather than with one
+	// canned result, which is what a depth-2 traversal needs.
+	installCallGraph(opts.Methods, os.Getenv(callGraphEnv), trace.record)
 
 	if os.Getenv(scenarioEnv) == scenarioIndexing {
 		// A token that is created, begun, reported on — and never
@@ -179,6 +188,14 @@ type scenario struct {
 	results map[string]any
 	// indexing makes the server report work that never finishes.
 	indexing bool
+	// diagnostics maps an absolute file path to the diagnostics the
+	// server publishes when that file is opened. A JSON null value
+	// means the server stays silent about the file; a path absent
+	// from the map is published as clean (M5, m5scenario_test.go).
+	diagnostics map[string]any
+	// calls maps a call-hierarchy item name to its incoming and
+	// outgoing calls (M5, m5scenario_test.go).
+	calls map[string]any
 	// trace, when set, is a file the server logs every received
 	// message to. Set it with scenario.traceTo.
 	trace string
@@ -236,6 +253,12 @@ func (s scenario) apply(t *testing.T) {
 	t.Setenv(capsEnv, mustJSON(t, caps))
 	if s.results != nil {
 		t.Setenv(resultsEnv, mustJSON(t, s.results))
+	}
+	if s.diagnostics != nil {
+		t.Setenv(diagnosticsEnv, mustJSON(t, s.diagnostics))
+	}
+	if s.calls != nil {
+		t.Setenv(callGraphEnv, mustJSON(t, s.calls))
 	}
 	t.Setenv(traceEnv, s.trace)
 }

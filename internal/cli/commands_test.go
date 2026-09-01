@@ -59,11 +59,12 @@ func loc(file string, line, startChar, endChar int) map[string]any {
 type resultsPayload struct {
 	Kind    string `json:"kind"`
 	Results []struct {
-		Path  string `json:"path"`
-		Kind  string `json:"kind"`
-		Label string `json:"label"`
-		Text  string `json:"text"`
-		Start struct {
+		Path   string `json:"path"`
+		Kind   string `json:"kind"`
+		Label  string `json:"label"`
+		Detail string `json:"detail"`
+		Text   string `json:"text"`
+		Start  struct {
 			Line, Column, Offset int
 		} `json:"start"`
 		End struct {
@@ -819,19 +820,18 @@ func TestTopLevelHelpListsCapabilityRequirements(t *testing.T) {
 	if stdout != "" {
 		t.Errorf("help wrote to stdout: %q", stdout)
 	}
+	// The M5 surface is in here too now: check, call_hierarchy, batch
+	// and --symbol are implemented, so the usage text has to say so.
 	for _, want := range []string{
 		"definition", "references", "implementation", "hover", "symbols",
 		"workspace_symbol", "rename", "codeaction", "format",
+		"check", "call_hierarchy", "batch", "--symbol", "sarif",
 		"needs referencesProvider", "needs renameProvider", "--apply",
+		"needs callHierarchyProvider",
 		"file.go:#1234", "exit codes",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("usage text is missing %q:\n%s", want, stderr)
-		}
-	}
-	for _, absent := range []string{"call_hierarchy", "sarif"} {
-		if strings.Contains(stderr, absent) {
-			t.Errorf("usage text promises %q, which M5 owns", absent)
 		}
 	}
 }

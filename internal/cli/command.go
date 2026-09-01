@@ -16,6 +16,10 @@ import (
 // diagnostics, server logs and usage text go to stderr, so that a
 // caller can parse stdout without filtering it.
 type env struct {
+	// stdin is the query stream `batch` reads. It is nil for a command
+	// run inside a batch, which is what makes `batch` inside `batch`
+	// impossible rather than merely discouraged.
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 }
@@ -72,10 +76,6 @@ func (c *command) Capability() (string, bool) {
 // of M1 and the mutations of M2. `raw` is the escape hatch from M0 and
 // deliberately carries no method: it is the one command that may call
 // anything, including methods no capability covers.
-//
-// check and call_hierarchy belong to M5 and are absent rather than
-// stubbed — a command that exists and does nothing is worse than one
-// that does not exist.
 //
 // The table is filled in init rather than declared as a literal
 // because the commands and the capability partition below refer to
@@ -147,6 +147,32 @@ func init() {
 			Summary: "format files with the server's own formatter",
 			Method:  methodFormatting,
 			Run:     formatCommand,
+		},
+		{
+			Name:    "check",
+			Args:    "[path...]",
+			Summary: "collect diagnostics for a file or a tree; exit 1 if any are errors",
+			// Deliberately unguarded. Diagnostics arrive as
+			// textDocument/publishDiagnostics, a notification any
+			// server may send without advertising anything; the pull
+			// model is an optimisation this command uses when the
+			// server does advertise it. Naming a method here would
+			// make `help` call the command unavailable on servers
+			// that answer it perfectly well.
+			Run: checkCommand,
+		},
+		{
+			Name:    "call_hierarchy",
+			Args:    "<loc>",
+			Summary: "print who calls the symbol at a location, and whom it calls",
+			Method:  methodPrepareCallHierarchy,
+			Run:     callHierarchyCommand,
+		},
+		{
+			Name:    "batch",
+			Args:    "[--file <path>]",
+			Summary: "run one query per input line and print one envelope per line",
+			Run:     batchCommand,
 		},
 		{
 			Name:    "raw",
@@ -247,9 +273,12 @@ Locations use gopls's span syntax, with 1-based lines and *byte* columns:
   file.go            file.go:12         file.go:12:5
   file.go:12:5-12:9  file.go:#1234
 
+Or name the symbol instead of computing a column:
+  --symbol 'pkg.Type.Method'   [--path DIR to say which workspace to search]
+
 common flags:
   --format json|text|diff   output format (json unless stdout is a terminal;
-                            diff when previewing edits)
+                            diff when previewing edits, sarif for diagnostics)
   --context N               N lines of source around each match
   --limit N                 at most N results, with truncated:true when it bites
   --indent                  pretty-print JSON

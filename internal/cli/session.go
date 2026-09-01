@@ -85,6 +85,11 @@ type sessionOptions struct {
 	// onRequest handles server-to-client requests the client library
 	// does not answer itself.
 	onRequest client.RequestHandler
+	// onNotification sees every server notification after the
+	// progress tracker has. `check` needs it, because diagnostics are
+	// pushed rather than answered; it runs on the read loop and must
+	// not block.
+	onNotification client.NotificationHandler
 }
 
 // startSession spawns the matched server, performs the handshake and
@@ -110,10 +115,11 @@ func startSessionWith(ctx context.Context, e *env, match router.Match, sopts ses
 	}
 
 	opts := client.SessionOptions{
-		RootDir:      match.Root,
-		Gate:         sopts.gate,
-		Capabilities: sopts.capabilities,
-		OnRequest:    sopts.onRequest,
+		RootDir:        match.Root,
+		Gate:           sopts.gate,
+		Capabilities:   sopts.capabilities,
+		OnRequest:      sopts.onRequest,
+		OnNotification: sopts.onNotification,
 	}
 	if len(match.Server.Server.InitializationOptions) > 0 {
 		opts.InitializationOptions = match.Server.Server.InitializationOptions
@@ -158,6 +164,15 @@ func reap(server *client.Server) {
 // the file extension, because the server definition is what claimed
 // the file in the first place.
 func (s *session) open(path string) (*docstore.Document, error) {
+	return s.openAs(path, s.match.LanguageID)
+}
+
+// openAs is open with the language id spelled out, for a command that
+// opens several kinds of file in one workspace: `check .` on a Go
+// module opens both the .go files and the go.mod, and announcing the
+// latter as "go" would be telling the server something untrue about a
+// file it is about to parse.
+func (s *session) openAs(path, languageID string) (*docstore.Document, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -165,7 +180,7 @@ func (s *session) open(path string) (*docstore.Document, error) {
 		}
 		return nil, render.Errorf(render.CodeIOError, "reading %s: %v", path, err)
 	}
-	doc, err := s.docs.OpenContent(path, s.match.LanguageID, content)
+	doc, err := s.docs.OpenContent(path, languageID, content)
 	if err != nil {
 		return nil, render.Errorf(render.CodeServerCrash, "opening %s on %s: %v", path, s.match.Server.Name, err)
 	}

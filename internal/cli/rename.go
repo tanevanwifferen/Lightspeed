@@ -40,11 +40,11 @@ func locationPath(arg string) (string, error) {
 // fails before a single edit has been staged.
 func renameCommand(e *env, c *command, args []string) int {
 	var mf mutationFlags
-	common, positional, err := parseFlags(e, c, args, 2, mf.register)
+	common, sf, locArg, rest, err := parseLocationFlags(e, c, args, 1, mf.register)
 	if err != nil {
 		return e.flagError(err)
 	}
-	newName := positional[1]
+	newName := rest[0]
 	if strings.TrimSpace(newName) == "" {
 		return e.usagef("rename: the new name must not be empty")
 	}
@@ -53,11 +53,18 @@ func renameCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	path, err := locationPath(positional[0])
+	// --symbol resolves before the worktree check, because resolving
+	// it needs a server and the check does not write anything. The
+	// order that matters is unchanged: nothing is written until the
+	// worktree has been found clean.
+	locArg, warnings, err := e.location(common, sf, locArg)
 	if err != nil {
 		return e.fail(err)
 	}
-	var warnings []string
+	path, err := locationPath(locArg)
+	if err != nil {
+		return e.fail(err)
+	}
 	if mf.apply {
 		clean, err := checkWorktrees([]string{path}, mf.allowDirty)
 		warnings = append(warnings, clean...)
@@ -67,7 +74,7 @@ func renameCommand(e *env, c *command, args []string) int {
 	}
 
 	var collector editCollector
-	q, cleanup, err := prepareWith(e, common, positional[0], mutationSession(common, &collector))
+	q, cleanup, err := prepareWith(e, common, locArg, mutationSession(common, &collector))
 	defer cleanup()
 	if err != nil {
 		return e.fail(err)
@@ -82,7 +89,7 @@ func renameCommand(e *env, c *command, args []string) int {
 			return e.fail(err)
 		}
 		warnings = append(warnings, res.Warnings...)
-		if err := checkPrepareRename(res.Result, positional[0]); err != nil {
+		if err := checkPrepareRename(res.Result, locArg); err != nil {
 			return e.fail(err)
 		}
 	}

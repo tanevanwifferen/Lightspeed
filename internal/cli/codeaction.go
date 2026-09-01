@@ -32,7 +32,7 @@ func codeActionCommand(e *env, c *command, args []string) int {
 		title string
 		kinds string
 	)
-	common, positional, err := parseFlags(e, c, args, 1, func(fs *flag.FlagSet) {
+	common, sf, locArg, _, err := parseLocationFlags(e, c, args, 0, func(fs *flag.FlagSet) {
 		mf.register(fs)
 		fs.IntVar(&index, "index", 0, "apply the nth action of the list (1-based)")
 		fs.StringVar(&title, "title", "", "apply the action with this title")
@@ -41,7 +41,6 @@ func codeActionCommand(e *env, c *command, args []string) int {
 	if err != nil {
 		return e.flagError(err)
 	}
-	arg := positional[0]
 	switch {
 	case index != 0 && title != "":
 		return e.usagef("codeaction: give --index or --title, not both")
@@ -58,11 +57,14 @@ func codeActionCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
+	arg, warnings, err := e.location(common, sf, locArg)
+	if err != nil {
+		return e.fail(err)
+	}
 	path, err := locationPath(arg)
 	if err != nil {
 		return e.fail(err)
 	}
-	var warnings []string
 	if mf.apply {
 		clean, err := checkWorktrees([]string{path}, mf.allowDirty)
 		warnings = append(warnings, clean...)

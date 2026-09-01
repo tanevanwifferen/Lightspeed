@@ -1,0 +1,128 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "lightspeed",
+          "informationUri": "https://github.com/tanevanwifferen/Lightspeed",
+          "rules": [
+            {
+              "id": "compiler/unusedvar",
+              "shortDescription": {
+                "text": "compiler unusedvar"
+              }
+            },
+            {
+              "id": "compiler/UndeclaredName",
+              "shortDescription": {
+                "text": "compiler UndeclaredName"
+              }
+            },
+            {
+              "id": "staticcheck/U1000",
+              "shortDescription": {
+                "text": "staticcheck U1000"
+              }
+            }
+          ]
+        }
+      },
+      "columnKind": "utf16CodeUnits",
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": "file:///SRCROOT/"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "compiler/unusedvar",
+          "ruleIndex": 0,
+          "level": "warning",
+          "message": {
+            "text": "変数 is never used"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cjk.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 3,
+                  "startColumn": 5,
+                  "endLine": 3,
+                  "endColumn": 7,
+                  "snippet": {
+                    "text": "var 変数 = 1"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "compiler/UndeclaredName",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "undefined: 変数"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cjk.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 6,
+                  "startColumn": 9,
+                  "endLine": 6,
+                  "endColumn": 11,
+                  "snippet": {
+                    "text": "\treturn 変数 + 変数"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "staticcheck/U1000",
+          "ruleIndex": 2,
+          "level": "note",
+          "message": {
+            "text": "helper is unused"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "helper.go",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 3,
+                  "startColumn": 6,
+                  "endLine": 3,
+                  "endColumn": 12,
+                  "snippet": {
+                    "text": "func helper() {}"
+                  }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tags": [
+              "unnecessary"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,8 +1,12 @@
 # Lightspeed — an LSP CLI
 
-**Status:** plan / not implemented
+**Status:** implemented through M5 (M0–M5 merged); see §8 for the per-milestone
+state and the deferrals. Two finished packages are not yet reachable from the
+command line — the daemon (§3) and the config layering (§6) — so the CLI starts
+a fresh server per invocation and resolves against the built-in table only.
+`README.md` is the user-facing manual and records the same gaps.
 **Binary:** `lightspeed`
-**Language:** Go (≥1.26)
+**Language:** Go (≥1.26; the module is `go 1.27.0`)
 **Primary consumer:** coding agents (LLMs shelling out), secondary: scripted refactors, humans
 
 **One-line pitch:** *`gopls`'s command-line interface, generalized to every language server.*
@@ -291,37 +295,71 @@ integration tests against real gopls and rust-analyzer.
 
 ## 8. Milestones
 
-**M-1 — Verification pass (do this first, ~half a day).** Install and probe `lsproxy`,
+Status marker: **done** means built, tested and reachable from the command line;
+**built, not wired** means the package is complete and tested but no subcommand
+exposes it.
+
+**M-1 — Verification pass (do this first, ~half a day).** *Not done.* No
+third-party tool was installed or probed, and the licence checks were made only
+where the code needed them (`go.lsp.dev` was avoided entirely — see
+docs/DECISIONS.md D3 — and nvim-lspconfig's Apache-2.0 is recorded in
+ATTRIBUTION; Helix's MPL corpus stays unused, so §9.3 remains open). The gap
+assessment in §0 is therefore still search-snippet evidence, and the honest
+assessment there stands unverified. Install and probe `lsproxy`,
 `lspeasy` and `agent-lsp`. Test each for the §5 failure modes: CJK-identifier rename,
 query-during-indexing, partial multi-file edit. Confirm licenses for `go.lsp.dev/protocol`,
 Helix and nvim-lspconfig. *Outcome: either evidence of a real gap, or a decision to contribute
 upstream instead.*
 
-**M0 — Spike.** Vendor the gopls files with ATTRIBUTION. `lightspeed raw` works end to end
+**M0 — Spike. Done.** Vendor the gopls files with ATTRIBUTION. `lightspeed raw` works end to end
 against a hardcoded server.
 
-**M1 — Read-only.** Router, docstore, readiness. `definition`, `references`,
+**M1 — Read-only. Done.** Router, docstore, readiness. `definition`, `references`,
 `implementation`, `hover`, `symbols`, all formats.
 *Done when:* `references` on a CJK fixture is byte-exact, and a mid-indexing query exits 5
-rather than returning an empty list.
+rather than returning an empty list. — both hold, and both are tested.
 
-**M2 — Mutation.** Transactional applier, `rename` (preview + `--apply`), `codeaction`,
+**M2 — Mutation. Done.** Transactional applier, `rename` (preview + `--apply`), `codeaction`,
 `format`.
 *Done when:* a 3-file rename either fully applies or leaves the tree untouched; a scripted
 malicious overlapping edit is rejected with nothing written; `--format diff | git apply`
-reproduces `--apply` exactly.
+reproduces `--apply` exactly. — all three hold, and all three are tested.
 
-**M3 — Daemon.** Port gopls's remote design to N servers.
+**M3 — Daemon. Built, not wired.** Port gopls's remote design to N servers.
 *Done when:* second `references` on a rust-analyzer workspace returns in <200ms.
 
-**M4 — Server resolution.** Config layers, generated defaults, PATH sniffing, mise-backed
+`internal/daemon` implements auto-spawn, idle reaping, the N-server pool keyed by
+workspace root, and `--no-daemon`, and is tested — but no `lightspeed daemon`
+subcommand exists and no command dials it. So the latency criterion is unproven
+end to end and every invocation still pays server startup. The largest remaining
+performance item.
+
+**M4 — Server resolution. Built, not wired.** Config layers, generated defaults, PATH sniffing, mise-backed
 `install`, `servers`, `doctor`.
 *Done when:* gopls, rust-analyzer, pyright, vtsls, clangd and lua-ls all answer `references`
 on a clean machine with no hand-written config.
 
-**M5 — Polish.** `check` + SARIF, call hierarchy, `--symbol` resolution, batch/stdin mode, docs.
+`internal/serverdef` implements the layering, the generated defaults, PATH
+sniffing, the TOML subset and mise delegation, with per-key provenance, and the
+six definitions are checked against real install artifacts — but `internal/cli`
+still resolves against `serverdef.Builtins()` alone, and there are no `servers`,
+`install` or `doctor` subcommands. A `.lightspeed.toml` in a workspace is
+therefore parsed by nothing, and the criterion holds only for servers already on
+`PATH`.
 
-Deferred: MCP surface (`go-sdk`), sandboxing, WASM plugins, library/SDK, multi-server merging.
+**M5 — Polish. Done.** `check` + SARIF, call hierarchy, `--symbol` resolution, batch/stdin mode, docs.
+Decisions taken here are logged as D10–D13 in docs/DECISIONS.md: how `check`
+decides it has every diagnostic (readiness gate + a publish per opened file, exit
+5 otherwise), how `--symbol` handles ambiguity (refuse, with every candidate as a
+location), and batch mode's per-line envelopes and severity-ranked exit code.
+
+Deferred: MCP surface (`go-sdk`), sandboxing, WASM plugins, library/SDK,
+multi-server merging (`check` reports one workspace at a time and warns about the
+files it skipped). Also outstanding, and not on the original list: wiring the M3
+daemon and the M4 config layering to the command line (see above), a `--offline`
+flag over `serverdef`'s existing kill switch, and PLAN §7's build-tagged
+integration tests against real gopls and rust-analyzer — every test in the tree
+is hermetic against `internal/fakeserver`.
 
 ---
 
