@@ -821,15 +821,17 @@ func TestTopLevelHelpListsCapabilityRequirements(t *testing.T) {
 	}
 	for _, want := range []string{
 		"definition", "references", "implementation", "hover", "symbols",
-		"workspace_symbol", "needs referencesProvider", "file.go:#1234", "exit codes",
+		"workspace_symbol", "rename", "codeaction", "format",
+		"needs referencesProvider", "needs renameProvider", "--apply",
+		"file.go:#1234", "exit codes",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("usage text is missing %q:\n%s", want, stderr)
 		}
 	}
-	for _, absent := range []string{"rename", "codeaction", "call_hierarchy"} {
+	for _, absent := range []string{"call_hierarchy", "sarif"} {
 		if strings.Contains(stderr, absent) {
-			t.Errorf("usage text promises %q, which M1 does not implement", absent)
+			t.Errorf("usage text promises %q, which M5 owns", absent)
 		}
 	}
 }

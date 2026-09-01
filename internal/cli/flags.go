@@ -34,7 +34,7 @@ type commonFlags struct {
 
 // register adds the common flags to fs.
 func (f *commonFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(&f.format, "format", "", "output format: json, text or diff (default json, or text on a terminal)")
+	fs.StringVar(&f.format, "format", "", "output format: json, text or diff (default json, text on a terminal, diff for an edit preview)")
 	fs.IntVar(&f.context, "context", 0, "lines of source to print around each result")
 	fs.IntVar(&f.limit, "limit", 0, "maximum number of results (0 = no limit); truncation is always reported")
 	fs.BoolVar(&f.indent, "indent", false, "pretty-print JSON output")
@@ -94,6 +94,13 @@ func (f *commonFlags) resolveFormat(w io.Writer) (render.Format, error) {
 // the remainder parsed as flags, so flags may appear on either side of
 // them — which is what every caller, human or agent, expects.
 func parseFlags(e *env, c *command, args []string, want int, extra func(*flag.FlagSet)) (*commonFlags, []string, error) {
+	return parseFlagsRange(e, c, args, want, want, extra)
+}
+
+// parseFlagsRange is parseFlags for a command that takes a variable
+// number of positional arguments: `format` takes one path or twenty.
+// A max of -1 means "no upper bound".
+func parseFlagsRange(e *env, c *command, args []string, min, max int, extra func(*flag.FlagSet)) (*commonFlags, []string, error) {
 	fs := flag.NewFlagSet(c.Name, flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	fs.Usage = func() {
@@ -118,12 +125,25 @@ func parseFlags(e *env, c *command, args []string, want int, extra func(*flag.Fl
 	if err := common.validate(); err != nil {
 		return nil, nil, err
 	}
-	if len(positional) != want {
+	if len(positional) < min || (max >= 0 && len(positional) > max) {
 		fs.Usage()
 		return nil, nil, render.Errorf(render.CodeUsage,
-			"%s: expected %d argument(s) %s, got %d", c.Name, want, c.Args, len(positional))
+			"%s: expected %s argument(s) %s, got %d", c.Name, countRange(min, max), c.Args, len(positional))
 	}
 	return common, positional, nil
+}
+
+// countRange describes an accepted positional-argument count for an
+// error message.
+func countRange(min, max int) string {
+	switch {
+	case min == max:
+		return fmt.Sprintf("%d", min)
+	case max < 0:
+		return fmt.Sprintf("at least %d", min)
+	default:
+		return fmt.Sprintf("%d to %d", min, max)
+	}
 }
 
 // splitPositional separates positional arguments from flag arguments,
