@@ -137,6 +137,13 @@ type locationQuery struct {
 // from the error return so that a failure after the server started
 // still reaps it.
 func prepare(e *env, common *commonFlags, arg string) (*locationQuery, func(), error) {
+	return prepareWith(e, common, arg, sessionOptions{gate: common.gateOptions()})
+}
+
+// prepareWith is prepare with the handshake spelled out, for the
+// mutation commands: they advertise capabilities the read-only surface
+// must not (see mutationCapabilities).
+func prepareWith(e *env, common *commonFlags, arg string, sopts sessionOptions) (*locationQuery, func(), error) {
 	noop := func() {}
 
 	loc := goplscmd.ParseLocation(arg)
@@ -156,7 +163,7 @@ func prepare(e *env, common *commonFlags, arg string) (*locationQuery, func(), e
 
 	connectCtx, cancel := context.WithTimeout(context.Background(), common.timeout)
 	defer cancel()
-	s, err := startSession(connectCtx, e, match, common.gateOptions())
+	s, err := startSessionWith(connectCtx, e, match, sopts)
 	if err != nil {
 		return nil, noop, err
 	}

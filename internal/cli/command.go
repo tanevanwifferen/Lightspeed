@@ -68,14 +68,14 @@ func (c *command) Capability() (string, bool) {
 	return client.CapabilityFor(c.Method)
 }
 
-// commands is the read-only command surface of PLAN §4. `raw` is the
-// escape hatch from M0 and deliberately carries no method: it is the
-// one command that may call anything, including methods no capability
-// covers.
+// commands is the command surface of PLAN §4: the read-only commands
+// of M1 and the mutations of M2. `raw` is the escape hatch from M0 and
+// deliberately carries no method: it is the one command that may call
+// anything, including methods no capability covers.
 //
-// rename, codeaction, format, check and call_hierarchy belong to later
-// milestones and are absent rather than stubbed — a command that
-// exists and does nothing is worse than one that does not exist.
+// check and call_hierarchy belong to M5 and are absent rather than
+// stubbed — a command that exists and does nothing is worse than one
+// that does not exist.
 //
 // The table is filled in init rather than declared as a literal
 // because the commands and the capability partition below refer to
@@ -126,6 +126,27 @@ func init() {
 			Summary: "search the whole workspace for a symbol by name",
 			Method:  methodWorkspaceSymbol,
 			Run:     workspaceSymbolCommand,
+		},
+		{
+			Name:    "rename",
+			Args:    "<loc> <newname>",
+			Summary: "rename the symbol at a location across the workspace",
+			Method:  methodRename,
+			Run:     renameCommand,
+		},
+		{
+			Name:    "codeaction",
+			Args:    "<loc|range>",
+			Summary: "list the server's code actions at a location, or apply one",
+			Method:  methodCodeAction,
+			Run:     codeActionCommand,
+		},
+		{
+			Name:    "format",
+			Args:    "<path...>",
+			Summary: "format files with the server's own formatter",
+			Method:  methodFormatting,
+			Run:     formatCommand,
 		},
 		{
 			Name:    "raw",
@@ -197,7 +218,7 @@ func unsupportedMethodError(err *client.UnsupportedMethodError, caps *client.Cap
 	if len(names) > 0 {
 		msg += "; this server can answer: " + strings.Join(names, ", ")
 	} else {
-		msg += "; this server can answer no read-only command"
+		msg += "; this server can answer no lightspeed command"
 	}
 	return render.Errorf(render.CodeUnsupportedMethod, "%s", msg).
 		WithDetails(map[string]any{
@@ -227,13 +248,18 @@ Locations use gopls's span syntax, with 1-based lines and *byte* columns:
   file.go:12:5-12:9  file.go:#1234
 
 common flags:
-  --format json|text|diff   output format (json unless stdout is a terminal)
+  --format json|text|diff   output format (json unless stdout is a terminal;
+                            diff when previewing edits)
   --context N               N lines of source around each match
   --limit N                 at most N results, with truncated:true when it bites
   --indent                  pretty-print JSON
   --timeout D               how long to wait for the workspace to become ready
   --settle D                how long a result must be unchanged before it is believed
   --server NAME             pick a server when several claim the file
+
+flags of the commands that write:
+  --apply                   write the edits (default: preview them only)
+  --allow-dirty             --apply even though the git worktree is dirty
 
 exit codes:
   0 ok · 1 problems found (including an authoritative empty answer) ·

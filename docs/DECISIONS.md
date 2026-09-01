@@ -84,3 +84,61 @@ type assertion on an anonymous `interface{ ExitCode() int }`, so the exit-code
 taxonomy of PLAN §4 stays in `internal/cli` and `internal/client` does not
 import it. `errors.Is` works too, against `ErrNotReady` and
 `ErrUnsupportedMethod`.
+
+## D8 — `--apply` refuses a dirty git worktree (PLAN §9.4)
+
+**Decision:** yes, refuse, with `--allow-dirty` to override. Only tracked
+modifications count, and anything short of a clean answer from git is a
+warning rather than a refusal.
+
+PLAN §9.4 asks whether `rename --apply` should refuse a dirty worktree and
+suggests yes. It does, and so do `codeaction --apply` and `format --apply`:
+the reason is a property of writing, not of renaming.
+
+An agent's only reliable undo is `git checkout`, and that undo only works if
+everything the command finds in the worktree afterwards was put there by the
+command. Mixed with the agent's own uncommitted work, `git checkout` stops
+being an undo and becomes a second, larger mistake — so the safe state has to
+exist *before* lightspeed writes, not after. The check therefore runs as a
+precondition, before a language server is even started: finding out after a
+90-second rust-analyzer load would make the refusal useless.
+
+Untracked files are not dirt. `git checkout` does not remove them, so their
+presence costs the caller nothing, and refusing over a stray build artefact
+would train callers to pass `--allow-dirty` reflexively — which would cost the
+check its whole value.
+
+No git, no repository, or a git that declines to answer (a "dubious ownership"
+refusal looks exactly like "not a repository") produces an envelope warning
+saying there is no undo, and the write proceeds. lightspeed is not a git tool,
+and being unusable outside a repository would be a worse failure than the one
+this prevents.
+
+Detection shells out to `git rev-parse --show-toplevel` and
+`git status --porcelain -z --untracked-files=no`; no internal package knows
+anything about git, and vendoring a repository reader to avoid two subprocess
+calls that only run on `--apply` would be a poor trade.
+
+## D9 — A code action that arrives as a command (PLAN §4, M2)
+
+**Decision:** resolve it with `codeAction/resolve` where the server advertises
+it; otherwise run it with `workspace/executeCommand` and stage the
+`workspace/applyEdit` requests it pushes back. Exactly one pushed edit set per
+command is accepted.
+
+The protocol lets a code action carry no edit at all, and both remaining routes
+end in the same transactional applier, so an agent picking action 2 does not
+have to know which shape it got. Resolve is preferred because it computes an
+edit without running anything.
+
+Two consequences are deliberate and visible in the output:
+
+- A *preview* of a command-shaped action has to run the command, because the
+  edits do not exist until it has. That is a side effect inside a preview, so
+  it is warned about by name rather than hidden.
+- More than one pushed edit set is refused rather than merged. Two edit sets
+  computed against the same starting state cannot be composed without knowing
+  which of them the second was written against, and guessing would turn a
+  server's two safe edits into one wrong one. If a real server ever needs it,
+  the fix is to teach `internal/edit` to stage a sequence, not to paper over it
+  in the CLI.

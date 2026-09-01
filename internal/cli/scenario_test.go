@@ -105,6 +105,10 @@ func runFakeServer() int {
 			}
 			continue
 		}
+		if handler, ok := mutationMethod(method, result, trace.record); ok {
+			opts.Methods[method] = handler
+			continue
+		}
 		opts.Methods[method] = func(_ *fakeserver.Conn, params json.RawMessage) (any, error) {
 			trace.record(method, params)
 			return result, nil

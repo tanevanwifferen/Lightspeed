@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -69,9 +70,32 @@ type session struct {
 	docs   *docstore.Store
 }
 
+// sessionOptions are the per-command deviations from the default
+// handshake. A read-only command needs none of them; a mutation
+// command advertises more client capabilities (it can honour
+// documentChanges, resource operations and workspace/applyEdit, and
+// the read-only surface deliberately does not) and installs a handler
+// for the requests those capabilities invite.
+type sessionOptions struct {
+	// gate configures the readiness gate of PLAN §5.2.
+	gate client.GateOptions
+	// capabilities overrides the advertised client capabilities; nil
+	// means client.DefaultClientCapabilities.
+	capabilities map[string]any
+	// onRequest handles server-to-client requests the client library
+	// does not answer itself.
+	onRequest client.RequestHandler
+}
+
 // startSession spawns the matched server, performs the handshake and
 // returns a session. The caller must call close.
 func startSession(ctx context.Context, e *env, match router.Match, gate client.GateOptions) (*session, error) {
+	return startSessionWith(ctx, e, match, sessionOptions{gate: gate})
+}
+
+// startSessionWith is startSession with the per-command handshake
+// deviations spelled out.
+func startSessionWith(ctx context.Context, e *env, match router.Match, sopts sessionOptions) (*session, error) {
 	argv := serverCommand(match)
 	if _, err := exec.LookPath(argv[0]); err != nil {
 		return nil, notInstalledError(match, argv[0])
@@ -85,7 +109,12 @@ func startSession(ctx context.Context, e *env, match router.Match, gate client.G
 		return nil, render.Errorf(render.CodeSpawnFailed, "starting %s: %v", match.Server.Name, err)
 	}
 
-	opts := client.SessionOptions{RootDir: match.Root, Gate: gate}
+	opts := client.SessionOptions{
+		RootDir:      match.Root,
+		Gate:         sopts.gate,
+		Capabilities: sopts.capabilities,
+		OnRequest:    sopts.onRequest,
+	}
 	if len(match.Server.Server.InitializationOptions) > 0 {
 		opts.InitializationOptions = match.Server.Server.InitializationOptions
 	}
@@ -152,23 +181,48 @@ func (s *session) query(ctx context.Context, method string, params any) (client.
 	if err == nil {
 		return res, nil
 	}
+	return res, s.translate(method, err)
+}
+
+// call issues an ungated, capability-checked request, with the same
+// error translation as query.
+//
+// The readiness gate of PLAN §5.2 is deliberately absent. These are
+// follow-ups to a request that was already gated — codeAction/resolve
+// filling in an action we already have, workspace/executeCommand
+// running one — and the gate reissues a request whose answer it cannot
+// yet believe. Reissuing a command that changes the workspace is not a
+// retry, it is a second execution.
+func (s *session) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	raw, err := s.lsp.Call(ctx, method, params)
+	if err != nil {
+		return nil, s.translate(method, err)
+	}
+	return raw, nil
+}
+
+// translate maps a failed request onto the code/exit taxonomy. A
+// not-ready workspace keeps its own error — internal/client's
+// *NotReadyError already reports exit code 5 — so that PLAN §5.2's
+// guarantee survives the trip through the CLI.
+func (s *session) translate(method string, err error) error {
 	var unsupported *client.UnsupportedMethodError
 	switch {
 	case errors.As(err, &unsupported):
-		return res, unsupportedMethodError(unsupported, s.lsp.Capabilities())
+		return unsupportedMethodError(unsupported, s.lsp.Capabilities())
 	case errors.Is(err, client.ErrNotReady):
-		return res, err
+		return err
 	case errors.Is(err, context.DeadlineExceeded):
-		return res, render.Errorf(render.CodeTimeout, "%s: %s did not answer in time", method, s.match.Server.Name)
+		return render.Errorf(render.CodeTimeout, "%s: %s did not answer in time", method, s.match.Server.Name)
 	case errors.Is(err, context.Canceled):
-		return res, render.Errorf(render.CodeCancelled, "%s: cancelled", method)
+		return render.Errorf(render.CodeCancelled, "%s: cancelled", method)
 	}
 	var rpcErr *client.RPCError
 	if errors.As(err, &rpcErr) {
-		return res, render.Errorf(render.CodeServerError, "%s: %s returned error %d: %s",
+		return render.Errorf(render.CodeServerError, "%s: %s returned error %d: %s",
 			method, s.match.Server.Name, rpcErr.Code, rpcErr.Message)
 	}
-	return res, render.Errorf(render.CodeServerCrash, "%s: %v", method, err)
+	return render.Errorf(render.CodeServerCrash, "%s: %v", method, err)
 }
 
 // serverCommand is the definition's command, with the test/debug
