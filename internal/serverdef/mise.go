@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -17,16 +18,45 @@ const MiseName = "mise"
 // A Runner runs one command and returns what it said. It is the single
 // seam through which this package touches processes, so that every test
 // in it can stay hermetic.
-type Runner func(ctx context.Context, name string, args ...string) (stdout, stderr string, err error)
+//
+// env carries "KEY=VALUE" entries added to the inherited environment,
+// later entries winning. It is a parameter rather than a detail of the
+// production runner because what is in it — see [miseProbeEnv] — is
+// part of PLAN §6's security posture, and a test must be able to assert
+// it rather than trust it.
+type Runner func(ctx context.Context, env []string, name string, args ...string) (stdout, stderr string, err error)
 
 // execRunner is the production Runner.
-func execRunner(ctx context.Context, name string, args ...string) (string, string, error) {
+func execRunner(ctx context.Context, env []string, name string, args ...string) (string, string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	err := cmd.Run()
 	return out.String(), errb.String(), err
+}
+
+// miseProbeEnv is the environment every mise call that only asks a
+// question runs with. Probing must never install anything: PLAN §6 says
+// nothing downloads implicitly, and answering "where is gopls?" by
+// fetching gopls would be exactly the implicit fetch it forbids.
+//
+// mise as shipped today does not install from `which` or `--version`,
+// so this changes no observed behaviour. It is here because the
+// guarantee belongs to lightspeed and should not rest on an installer's
+// current defaults: mise's own not_found_auto_install defaults to true,
+// and one release could make that apply somewhere it does not today.
+//
+// It is deliberately not conditional on [Options.Offline]. A probe has
+// no business downloading whether or not the kill switch is set, and
+// `mise use` — the one call that may download — is unaffected because
+// it does not run with this environment.
+var miseProbeEnv = []string{
+	"MISE_OFFLINE=1",
+	"MISE_NOT_FOUND_AUTO_INSTALL=0",
 }
 
 // A MiseStatus is what was learned about the installer. It is part of
@@ -67,7 +97,7 @@ func DetectMise(ctx context.Context, opts Options) MiseStatus {
 	if err != nil {
 		return MiseStatus{Problem: "not on PATH"}
 	}
-	stdout, stderr, err := opts.runner()(ctx, path, "--version")
+	stdout, stderr, err := opts.runner()(ctx, miseProbeEnv, path, "--version")
 	if err != nil {
 		return MiseStatus{Path: path, Problem: strings.TrimSpace(firstLine(stderr) + " " + err.Error())}
 	}
@@ -82,7 +112,7 @@ func miseWhich(ctx context.Context, binary string, opts Options, mise MiseStatus
 	if !mise.Available || mise.Path == "" {
 		return "", false
 	}
-	stdout, _, err := opts.runner()(ctx, mise.Path, "which", binary)
+	stdout, _, err := opts.runner()(ctx, miseProbeEnv, mise.Path, "which", binary)
 	if err != nil {
 		return "", false
 	}
@@ -152,20 +182,23 @@ func (r *Resolution) PlanInstall(name, version string) (*InstallPlan, error) {
 	if !ok {
 		return nil, &NoSuchServerError{Name: name, Known: r.Names()}
 	}
+	// The definition, not the probe: InstallServer loads without
+	// probing, so resolved.Binary is empty on that path and the
+	// message would lose the name of the thing to install.
+	binary := ""
+	if len(resolved.Def.Server.Command) > 0 {
+		binary = resolved.Def.Server.Command[0]
+	}
 	spec := resolved.Def.Install.Mise
 	if spec == "" {
 		return nil, &NotInstalledError{
 			Name:   name,
-			Binary: resolved.Binary.Name,
+			Binary: binary,
 			Reason: "its definition has no install.mise spec, so there is nothing to delegate",
 		}
 	}
 	if version != "" {
 		spec = withVersion(spec, version)
-	}
-	binary := ""
-	if len(resolved.Def.Server.Command) > 0 {
-		binary = resolved.Def.Server.Command[0]
 	}
 	return &InstallPlan{
 		Name:   name,
@@ -222,7 +255,10 @@ func (r *Resolution) Install(ctx context.Context, req InstallRequest, opts Optio
 		}
 	}
 
-	stdout, stderr, err := opts.runner()(ctx, mise.Path, plan.Use[1:]...)
+	// No miseProbeEnv here: this is the one call in lightspeed that is
+	// allowed to download, and it is only reached on an explicit
+	// request with the offline switch clear.
+	stdout, stderr, err := opts.runner()(ctx, nil, mise.Path, plan.Use[1:]...)
 	output := trimOutput(stdout, stderr)
 	if err != nil {
 		return nil, &InstallFailedError{Name: req.Name, Command: plan.Use, Err: err, Output: output}

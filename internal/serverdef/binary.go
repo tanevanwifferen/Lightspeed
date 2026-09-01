@@ -2,6 +2,7 @@ package serverdef
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,6 +49,32 @@ func (s BinarySource) String() string {
 	default:
 		return "not_found"
 	}
+}
+
+// binarySources is every source, so that the JSON name can be decoded
+// back without a second switch that could drift from String.
+var binarySources = []BinarySource{BinaryNotFound, BinaryCommandPath, BinaryPATH, BinaryMise, BinaryUnusable}
+
+// MarshalJSON renders a source as its name, for the same reason
+// [Layer.MarshalJSON] does: an agent reading the envelope of PLAN §4
+// should not have to know our iota order.
+func (s BinarySource) MarshalJSON() ([]byte, error) { return json.Marshal(s.String()) }
+
+// UnmarshalJSON accepts the name MarshalJSON produces, falling back to
+// [BinaryNotFound] for a name this build does not know.
+func (s *BinarySource) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
+	}
+	for _, candidate := range binarySources {
+		if candidate.String() == name {
+			*s = candidate
+			return nil
+		}
+	}
+	*s = BinaryNotFound
+	return nil
 }
 
 // A Binary is the outcome of looking for one server's executable.

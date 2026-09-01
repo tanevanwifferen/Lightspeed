@@ -83,15 +83,39 @@ func TestServersReport(t *testing.T) {
 	}
 
 	// The report survives the JSON envelope, which is how an agent will
-	// actually read it.
+	// actually read it. Enums travel as their names: an agent reading
+	// `"layer":2` would have to know our iota order, which is not part
+	// of any contract.
 	blob, err := json.Marshal(report)
 	if err != nil {
 		t.Fatalf("json.Marshal() = %v", err)
 	}
-	for _, want := range []string{`"layer":2`, `"installed":true`, `"install_command"`, `"origin"`} {
+	for _, want := range []string{
+		`"layer":"user"`, `"layer":"builtin"`, `"source":"path"`, `"source":"not_found"`,
+		`"installed":true`, `"install_command"`, `"origin"`,
+		`"license":"Apache-2.0"`,
+	} {
 		if !strings.Contains(string(blob), want) {
 			t.Errorf("JSON does not contain %s: %s", want, blob)
 		}
+	}
+	// No enum leaks as a bare number.
+	for _, unwanted := range []string{`"layer":0`, `"layer":1`, `"layer":2`, `"layer":3`, `"source":0`, `"source":2`} {
+		if strings.Contains(string(blob), unwanted) {
+			t.Errorf("JSON contains the raw enum %s, which an agent cannot interpret", unwanted)
+		}
+	}
+
+	// And it round-trips, so a report can be piped between processes.
+	var back ServersReport
+	if err := json.Unmarshal(blob, &back); err != nil {
+		t.Fatalf("json.Unmarshal() = %v", err)
+	}
+	if got := back.Servers[1]; got.Origin.Layer != LayerUser || got.Binary.Source != BinaryPATH {
+		t.Errorf("round-tripped gopls origin = %v, source = %v, want user/path", got.Origin.Layer, got.Binary.Source)
+	}
+	if back.Provenance != BuiltinProvenance() {
+		t.Errorf("round-tripped provenance = %+v, want %+v", back.Provenance, BuiltinProvenance())
 	}
 }
 

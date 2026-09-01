@@ -24,6 +24,11 @@ type testEnv struct {
 	// command can be run at all, which is the right default: a test
 	// that unexpectedly shells out should fail, not succeed slowly.
 	Runner Runner
+
+	// Env records the environment of every command the test ran, in
+	// order, so that a test can assert what the child process was
+	// given and not only what it was called with.
+	Env [][]string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -147,18 +152,19 @@ func (e *testEnv) lookPath(name string) (string, error) {
 	return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
 }
 
-func (e *testEnv) run(ctx context.Context, name string, args ...string) (string, string, error) {
+func (e *testEnv) run(ctx context.Context, env []string, name string, args ...string) (string, string, error) {
 	if e.Runner == nil {
 		e.t.Fatalf("test ran a command it did not expect: %s %v", name, args)
 	}
-	return e.Runner(ctx, name, args...)
+	e.Env = append(e.Env, env)
+	return e.Runner(ctx, env, name, args...)
 }
 
 // fakeMise is a Runner that answers the two mise calls this package
 // makes. version is reported by `--version`; which maps a binary name
 // to the path `mise which` returns.
 func fakeMise(version string, which map[string]string) Runner {
-	return func(_ context.Context, name string, args ...string) (string, string, error) {
+	return func(_ context.Context, _ []string, name string, args ...string) (string, string, error) {
 		if len(args) == 0 {
 			return "", "", exec.ErrNotFound
 		}

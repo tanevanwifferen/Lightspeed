@@ -1,5 +1,14 @@
-Attribution for vendored code
-=============================
+Attribution for vendored code and data
+======================================
+
+Lightspeed vendors two third-party works: the gopls position/edit
+machinery under internal/gopls/ (BSD-3-Clause) and the nvim-lspconfig
+server-configuration corpus under internal/gen/corpus/ (Apache-2.0).
+Each is covered below, with its provenance and its licence.
+
+
+1. gopls and x/tools — BSD-3-Clause, The Go Authors
+---------------------------------------------------
 
 The packages under internal/gopls/ contain code copied, with minimal
 adaptation, from the Go tools repository (https://go.googlesource.com/tools,
@@ -36,7 +45,7 @@ span/point types unexported, and Go visibility offers no other way to reach
 them). It carries no Go Authors copyright.
 
 Adaptations are limited to: rewriting import paths to
-github.com/owner/lightspeed/internal/gopls/..., extracting the small set of
+github.com/tanevanwifferen/Lightspeed/internal/gopls/..., extracting the small set of
 generated LSP type declarations needed by the copied files into
 protocol/types.go, omitting SelectCompletionTextEdit from edits.go (depends
 on completion types out of scope here), replacing a testenv.NeedsTool call
@@ -72,3 +81,62 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+----------------------------------------------------------------------
+
+
+2. nvim-lspconfig — Apache-2.0, Neovim contributors
+---------------------------------------------------
+
+internal/gen/corpus/nvim-lspconfig/ holds a verbatim snapshot of six
+server-configuration modules from nvim-lspconfig, written by the Neovim
+contributors and distributed under the Apache License 2.0, reproduced in
+full at internal/gen/corpus/nvim-lspconfig/LICENSE.md (copied verbatim
+from the same commit). Upstream ships no NOTICE file, so Apache-2.0
+section 4(d) imposes nothing further.
+
+Provenance:
+
+  github.com/neovim/nvim-lspconfig @ bff1bd61cb1455040533201ca1edf1e84efa578f
+  (committed 2026-08-19T18:24:55Z)
+
+    LICENSE.md            -> internal/gen/corpus/nvim-lspconfig/LICENSE.md
+    lsp/clangd.lua        -> internal/gen/corpus/nvim-lspconfig/lsp/clangd.lua
+    lsp/gopls.lua         -> internal/gen/corpus/nvim-lspconfig/lsp/gopls.lua
+    lsp/lua_ls.lua        -> internal/gen/corpus/nvim-lspconfig/lsp/lua_ls.lua
+    lsp/pyright.lua       -> internal/gen/corpus/nvim-lspconfig/lsp/pyright.lua
+    lsp/rust_analyzer.lua -> internal/gen/corpus/nvim-lspconfig/lsp/rust_analyzer.lua
+    lsp/vtsls.lua         -> internal/gen/corpus/nvim-lspconfig/lsp/vtsls.lua
+
+The .lua files are unmodified; their sha256 digests are published in
+internal/gen/corpus/nvim-lspconfig/PROVENANCE.md and re-checked by
+internal/gen/corpus_test.go, so an in-place edit fails the build rather
+than turning the snapshot into an unattributed fork.
+
+Derivative work, and the changes made to produce it (Apache-2.0 section
+4(b)): internal/serverdef/builtins_gen.go is generated from that snapshot
+by internal/gen. It carries each server's command, filetypes-mapped-to-
+language-ids and, where upstream states them declaratively, its root
+markers. It does not carry upstream's Lua behaviour (root_dir, on_attach,
+on_init, before_init, get_language_id), its editor policy (settings,
+capabilities) or its Neovim-only filetypes; and it adds path globs,
+install specs, and root markers transcribed from the Lua that computes
+them upstream. Every one of those changes is recorded, per server and
+per key, in the comments of builtins_gen.go itself, and the policy behind
+them in internal/gen/curate.go.
+
+Helix's languages.toml (MPL-2.0) is deliberately NOT used, and no
+generator reads it: PLAN.md §9.3 flags its file-level copyleft as an
+unresolved question for embedded generated data, and nvim-lspconfig's
+Apache-2.0 raises no such question.
+
+----------------------------------------------------------------------
+
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+The full text is reproduced verbatim at
+internal/gen/corpus/nvim-lspconfig/LICENSE.md, distributed with this
+repository as Apache-2.0 section 4(a) requires.

@@ -2,35 +2,129 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/tanevanwifferen/Lightspeed/schema/serverdef.schema.json",
   "title": "Lightspeed server definition",
-  "description": "Placeholder schema for the declarative server definitions of PLAN.md §6. Fleshed out in M4; the shape below mirrors the gopls example in the plan.",
+  "description": "The TOML server-definition files of PLAN.md §6, expressed over their decoded (JSON-equivalent) form. Two shapes are accepted and may not be mixed: one whole definition at the top level, or several under [servers.<name>]. Every file in the workspace and user layers is a *fragment*: it need only set the keys it changes, and the rest is inherited from the weaker layers (built-in defaults, then PATH sniffing). Only the merged result has to be complete, which is why nothing below is required except schema_version. Unknown keys are rejected by the loader rather than ignored, so a typo in root_markers is an error and not a server that silently never activates. Implemented by internal/serverdef; the built-in layer is generated into internal/serverdef/builtins_gen.go by internal/gen.",
   "type": "object",
-  "required": ["schema_version", "name"],
+  "required": ["schema_version"],
+  "oneOf": [
+    {
+      "title": "One definition per file",
+      "required": ["name"],
+      "not": { "required": ["servers"] }
+    },
+    {
+      "title": "Several definitions, named by table key",
+      "required": ["servers"],
+      "allOf": [
+        { "not": { "required": ["name"] } },
+        { "not": { "required": ["activation"] } },
+        { "not": { "required": ["server"] } },
+        { "not": { "required": ["install"] } }
+      ]
+    }
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
-    "name": { "type": "string", "minLength": 1 },
+    "schema_version": {
+      "const": 1,
+      "description": "The only version this build understands. Required in every file, including a fragment that changes one key."
+    },
+    "name": {
+      "$ref": "#/$defs/name",
+      "description": "The server this file describes. Present only in the one-definition shape; in the [servers.<name>] shape the table key names the server and this key is refused."
+    },
+    "servers": {
+      "type": "object",
+      "description": "Several definitions in one file, keyed by server name — what a polyglot repo needs in its single .lightspeed.toml.",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "$ref": "#/$defs/definition" },
+      "minProperties": 1
+    },
+    "activation": { "$ref": "#/$defs/activation" },
+    "server": { "$ref": "#/$defs/server" },
+    "install": { "$ref": "#/$defs/install" }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$",
+      "description": "Used as a human-facing identifier and as part of a session key, so it is constrained rather than free text."
+    },
+    "definition": {
+      "type": "object",
+      "description": "One server's tables inside [servers.<name>]. It carries no name and no schema_version: the table key names it, and the file's schema_version covers it.",
+      "properties": {
+        "activation": { "$ref": "#/$defs/activation" },
+        "server": { "$ref": "#/$defs/server" },
+        "install": { "$ref": "#/$defs/install" }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    },
     "activation": {
       "type": "object",
+      "description": "Which files this server claims, and how strongly. Arrays replace rather than merge when a stronger layer sets them: a shorter list is how a language or a glob is taken away.",
       "properties": {
-        "languages": { "type": "array", "items": { "type": "string" } },
-        "globs": { "type": "array", "items": { "type": "string" } },
-        "root_markers": { "type": "array", "items": { "type": "string" } },
-        "priority": { "type": "integer" }
-      }
+        "languages": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "LSP language identifiers (\"go\", \"rust\"), not editor filetypes."
+        },
+        "globs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Path patterns (\"**/*.go\"), relative to the resolved workspace root unless they begin with \"/\"."
+        },
+        "root_markers": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "File or directory names marking a workspace root, most significant first. \".git\" belongs last, or it outranks every project marker."
+        },
+        "priority": {
+          "type": "integer",
+          "description": "Orders servers claiming the same file: higher runs first. Absent means inherit; 50 is the default of the built-in table.",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      },
+      "additionalProperties": false
     },
     "server": {
       "type": "object",
+      "description": "How to start the process.",
       "properties": {
-        "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-        "transport": { "enum": ["stdio"] },
-        "initialization_options": { "type": "object" },
-        "settings": { "type": "object" }
-      }
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "argv, command first. Never passed through a shell. command[0] is also the executable PATH sniffing looks for.",
+          "prefixItems": [{ "type": "string", "minLength": 1 }]
+        },
+        "transport": {
+          "enum": ["stdio"],
+          "description": "The framing. Absent means stdio, the only transport in v1."
+        },
+        "initialization_options": {
+          "type": "object",
+          "description": "Sent verbatim as initializationOptions on the LSP initialize request. Merges key by key with weaker layers rather than replacing, so one knob can be changed without restating the tree."
+        },
+        "settings": {
+          "type": "object",
+          "description": "Sent verbatim as the settings of workspace/didChangeConfiguration, which several servers need after initialize (PLAN §5.4). Merges like initialization_options."
+        }
+      },
+      "additionalProperties": false
     },
     "install": {
       "type": "object",
+      "description": "How to obtain the server. Delegation only: lightspeed never downloads anything itself, and a missing server exits 3 quoting the command below rather than running it (PLAN §6).",
       "properties": {
-        "mise": { "type": "string" }
-      }
+        "mise": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A mise tool spec such as \"go:golang.org/x/tools/gopls@v0.23.0\" or \"npm:@vtsls/language-server\", passed to `mise use -g`. mise owns the backends, the checksums and the lockfile."
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

@@ -67,7 +67,7 @@ func TestDetectMise(t *testing.T) {
 func TestDetectMiseThatFails(t *testing.T) {
 	e := newTestEnv(t)
 	e.Binary("mise")
-	e.Runner = func(context.Context, string, ...string) (string, string, error) {
+	e.Runner = func(context.Context, []string, string, ...string) (string, string, error) {
 		return "", "mise: broken install\n", &exitStatus{code: 1}
 	}
 	got := DetectMise(t.Context(), e.Options())
@@ -229,9 +229,9 @@ func TestInstallDelegatesToMise(t *testing.T) {
 
 	var ran [][]string
 	base := fakeMise("2026.8.14", map[string]string{"pyright-langserver": installed})
-	e.Runner = func(ctx context.Context, name string, args ...string) (string, string, error) {
+	e.Runner = func(ctx context.Context, env []string, name string, args ...string) (string, string, error) {
 		ran = append(ran, append([]string{filepath.Base(name)}, args...))
-		return base(ctx, name, args...)
+		return base(ctx, env, name, args...)
 	}
 
 	opts := e.Options()
@@ -272,7 +272,7 @@ func TestInstallDelegatesToMise(t *testing.T) {
 func TestInstallFailureCarriesMiseOutput(t *testing.T) {
 	e := newTestEnv(t)
 	e.Binary("mise")
-	e.Runner = func(_ context.Context, _ string, args ...string) (string, string, error) {
+	e.Runner = func(_ context.Context, _ []string, _ string, args ...string) (string, string, error) {
 		if args[0] == "--version" {
 			return "2026.8.14\n", "", nil
 		}
@@ -315,14 +315,14 @@ func TestExecRunner(t *testing.T) {
 	if err != nil {
 		t.Skip("no sh available")
 	}
-	stdout, stderr, err := execRunner(t.Context(), sh, "-c", "echo out; echo err >&2")
+	stdout, stderr, err := execRunner(t.Context(), nil, sh, "-c", "echo out; echo err >&2")
 	if err != nil {
 		t.Fatalf("execRunner() = %v", err)
 	}
 	if strings.TrimSpace(stdout) != "out" || strings.TrimSpace(stderr) != "err" {
 		t.Errorf("stdout = %q, stderr = %q", stdout, stderr)
 	}
-	if _, _, err := execRunner(t.Context(), sh, "-c", "exit 3"); err == nil {
+	if _, _, err := execRunner(t.Context(), nil, sh, "-c", "exit 3"); err == nil {
 		t.Error("execRunner() reported success for a failing command")
 	}
 	if got := trimOutput(stdout, stderr); got != "out\nerr" {
@@ -337,9 +337,9 @@ func TestProbeServerIsTargeted(t *testing.T) {
 	e.Binary("mise")
 	var ran [][]string
 	base := fakeMise("2026.8.14", nil)
-	e.Runner = func(ctx context.Context, name string, args ...string) (string, string, error) {
+	e.Runner = func(ctx context.Context, env []string, name string, args ...string) (string, string, error) {
 		ran = append(ran, args)
-		return base(ctx, name, args...)
+		return base(ctx, env, name, args...)
 	}
 	opts := e.Options()
 	res, err := Load(opts)
