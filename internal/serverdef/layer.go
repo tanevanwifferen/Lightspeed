@@ -1,6 +1,9 @@
 package serverdef
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Names and environment variables of the configuration layers of
 // PLAN §6.
@@ -90,12 +93,28 @@ func (l Layer) Describe() string {
 	}
 }
 
-// stronger reports whether l overrides other.
-func (l Layer) stronger(other Layer) bool {
-	if other == LayerUnknown {
-		return l != LayerUnknown
+// MarshalJSON renders a layer as its name rather than its number. The
+// envelope of PLAN §4 is read by agents, and `"layer":3` tells one
+// nothing while `"layer":"builtin"` needs no lookup table. It also
+// decouples the wire form from the iota order, which is free to change.
+func (l Layer) MarshalJSON() ([]byte, error) { return json.Marshal(l.String()) }
+
+// UnmarshalJSON accepts the name MarshalJSON produces. An unknown name
+// is [LayerUnknown] rather than an error, so that a report written by a
+// newer lightspeed can still be read by an older one.
+func (l *Layer) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return err
 	}
-	return l != LayerUnknown && l < other
+	for _, candidate := range Layers() {
+		if candidate.String() == name {
+			*l = candidate
+			return nil
+		}
+	}
+	*l = LayerUnknown
+	return nil
 }
 
 // An Origin is where one fragment came from: which layer, and which

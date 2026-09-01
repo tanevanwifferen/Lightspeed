@@ -44,12 +44,30 @@
 // that one operation; resolution and queries keep working offline,
 // because nothing they do needs the network.
 //
+// `mise use` is the only call that may fetch anything, and it is only
+// reached on an explicit request with the kill switch clear. The calls
+// that merely ask questions — `mise --version` and `mise which`, run
+// while probing — run with [miseProbeEnv], which tells mise not to
+// install. mise does not install from those commands today; the guard
+// is there so that "nothing downloads implicitly" stays lightspeed's
+// guarantee rather than a bet on an installer's defaults.
+//
+// mise is a delegate and not a dependency: without it, PATH sniffing
+// still answers and only installation fails, with a
+// [MiseUnavailableError] that says what to do by hand.
+//
 // # The three commands
 //
 // [Servers], [InstallServer] and [Doctor] are the data behind
 // `lightspeed servers`, `install` and `doctor`. They return structured
 // reports and never print: rendering belongs to internal/render, and an
-// agent reads the JSON envelope, not our prose.
+// agent reads the JSON envelope, not our prose. Every report carries
+// [Provenance], so a built-in default can be traced to the corpus and
+// licence it came from without reading this source.
+//
+// The enums in those reports ([Layer], [BinarySource]) marshal as their
+// names and not their numbers, so the envelope stays readable and the
+// iota order stays an implementation detail.
 //
 // # TOML subset
 //

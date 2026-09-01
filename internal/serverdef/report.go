@@ -117,6 +117,10 @@ type ServersReport struct {
 	Layers []LayerStatus `json:"layers"`
 	// Mise is the installer's status.
 	Mise MiseStatus `json:"mise"`
+	// Provenance says where the built-in layer's data came from and
+	// under which licence. It travels with every report so that a
+	// default can be traced to its corpus without reading our source.
+	Provenance Provenance `json:"provenance"`
 	// Offline reports the kill switch.
 	Offline bool `json:"offline"`
 	// Problems are configuration files that could not be used. The
@@ -152,10 +156,11 @@ func Servers(ctx context.Context, opts Options) (*ServersReport, error) {
 // ServersReport turns a resolution into the report of [Servers].
 func (r *Resolution) ServersReport() *ServersReport {
 	report := &ServersReport{
-		Layers:   r.Layers,
-		Mise:     r.Mise,
-		Offline:  r.Offline,
-		Problems: r.Problems,
+		Layers:     r.Layers,
+		Mise:       r.Mise,
+		Provenance: BuiltinProvenance(),
+		Offline:    r.Offline,
+		Problems:   r.Problems,
 	}
 	for _, s := range r.Servers {
 		report.Servers = append(report.Servers, ServerStatus{
@@ -185,6 +190,9 @@ type DoctorReport struct {
 	Layers []LayerStatus `json:"layers"`
 	// Mise is the installer's status.
 	Mise MiseStatus `json:"mise"`
+	// Provenance says where the built-in layer's data came from and
+	// under which licence.
+	Provenance Provenance `json:"provenance"`
 	// Offline reports the kill switch.
 	Offline bool `json:"offline"`
 }
@@ -221,10 +229,11 @@ func Doctor(ctx context.Context, paths []string, opts Options) (*DoctorReport, e
 	res.Probe(ctx, opts)
 
 	report := &DoctorReport{
-		Servers: res.ServersReport().Servers,
-		Layers:  res.Layers,
-		Mise:    res.Mise,
-		Offline: res.Offline,
+		Servers:    res.ServersReport().Servers,
+		Layers:     res.Layers,
+		Mise:       res.Mise,
+		Provenance: BuiltinProvenance(),
+		Offline:    res.Offline,
 	}
 	report.Checks = append(report.Checks, offlineCheck(res))
 	report.Checks = append(report.Checks, miseCheck(res))
@@ -285,7 +294,10 @@ func layerChecks(res *Resolution) []Check {
 			check.Severity = SeverityInfo
 			check.Message = fmt.Sprintf("%s layer not consulted: %s", layer.Layer, layer.Skipped)
 		case layer.Layer == LayerBuiltin:
+			p := BuiltinProvenance()
 			check.Message = fmt.Sprintf("%d built-in default(s): %s", len(layer.Servers), strings.Join(layer.Servers, ", "))
+			check.Detail = fmt.Sprintf("generated from %s @ %s (%s, %s); see ATTRIBUTION",
+				p.Corpus, p.Commit[:min(12, len(p.Commit))], p.License, p.Upstream)
 		case !layer.Exists:
 			check.Severity = SeverityInfo
 			check.Message = fmt.Sprintf("%s is not there, so the %s layer contributes nothing", layer.Path, layer.Layer)
