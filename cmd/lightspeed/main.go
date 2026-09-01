@@ -1,5 +1,8 @@
 // Lightspeed is gopls's command-line interface generalized to every
-// language server. See PLAN.md; this is the M0 spike.
+// language server: it answers definition, references, implementation,
+// hover, symbols and workspace_symbol for whichever server handles the
+// file, in a machine-readable envelope with an exit-code taxonomy an
+// agent can branch on. See PLAN.md.
 package main
 
 import (

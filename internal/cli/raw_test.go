@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
@@ -18,10 +17,9 @@ const fakeServerModeEnv = "LIGHTSPEED_TEST_FAKESERVER"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(fakeServerModeEnv) == "1" {
-		if err := fakeserver.Serve(os.Stdin, os.Stdout); err != nil {
-			os.Exit(1)
-		}
-		os.Exit(0)
+		// runFakeServer (scenario_test.go) picks the script from the
+		// environment; with no scenario set it is the M0 fixed one.
+		os.Exit(runFakeServer())
 	}
 	os.Exit(m.Run())
 }
@@ -39,8 +37,15 @@ func useFakeServer(t *testing.T) {
 }
 
 // runMain runs the CLI in-process and returns exit code and streams.
+//
+// The streams are safeBuffers, not bytes.Buffers: the CLI hands its
+// stderr to os/exec as the language server's stderr, and for a writer
+// that is not an *os.File os/exec copies through a goroutine. A
+// bytes.Buffer loses concurrent writes outright there — ReadFrom
+// truncates the buffer before its blocking read and restores the
+// length afterwards — so the CLI's own diagnostics would vanish.
 func runMain(args ...string) (code int, stdout, stderr string) {
-	var out, errOut bytes.Buffer
+	var out, errOut safeBuffer
 	code = Main(args, &out, &errOut)
 	return code, out.String(), errOut.String()
 }

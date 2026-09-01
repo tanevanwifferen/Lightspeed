@@ -30,6 +30,11 @@ Provenance:
     internal/diff/lcs/                        -> internal/gopls/diff/lcs/
     internal/diff/difftest/                   -> internal/gopls/diff/difftest/
 
+internal/gopls/cmd/export.go is *not* vendored: it is lightspeed's own
+exported facade over the vendored span parser (gopls keeps parseSpan and its
+span/point types unexported, and Go visibility offers no other way to reach
+them). It carries no Go Authors copyright.
+
 Adaptations are limited to: rewriting import paths to
 github.com/owner/lightspeed/internal/gopls/..., extracting the small set of
 generated LSP type declarations needed by the copied files into
