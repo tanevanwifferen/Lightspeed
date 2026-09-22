@@ -32,6 +32,16 @@ const (
 	// message it receives, so a test can assert on what actually went
 	// over the wire rather than on what the answer looked like.
 	traceEnv = "LIGHTSPEED_TEST_TRACE"
+	// spawnLogEnv names a file the server appends one line to as it
+	// starts, before it reads anything. It counts language-server
+	// *processes*, which is the fact the daemon exists to change: a
+	// daemon's own report of how many servers it started is evidence
+	// about the daemon, this is evidence about the machine.
+	spawnLogEnv = "LIGHTSPEED_TEST_SPAWNLOG"
+	// outlineEnv makes the server a *text* server (index_scenario_test.go):
+	// its documentSymbol and references answers come from the text of the
+	// files, as a real server's do, and not from a canned result.
+	outlineEnv = "LIGHTSPEED_TEST_OUTLINE"
 )
 
 // scenarioScript is the value of scenarioEnv for the scripted server.
@@ -71,6 +81,13 @@ func echoPosition(_ *fakeserver.Conn, params json.RawMessage) (any, error) {
 // runFakeServer is the child-process half of the harness: it reads
 // the script from the environment and serves one session.
 func runFakeServer() int {
+	if path := os.Getenv(spawnLogEnv); path != "" {
+		logLine(path, "spawn")
+		// "exit" is what proves a server was shut down and not merely
+		// forgotten: a daemon that leaks one leaves a "spawn" with no
+		// matching "exit".
+		defer logLine(path, "exit")
+	}
 	switch os.Getenv(scenarioEnv) {
 	case scenarioScript, scenarioIndexing:
 	default:
@@ -97,9 +114,11 @@ func runFakeServer() int {
 	// server that pushes diagnostics in reply to didOpen. It does
 	// nothing unless the scenario asked for diagnostics.
 	publisher := newDiagnosticsScript(os.Getenv(diagnosticsEnv))
+	text := newTextServer(os.Getenv(outlineEnv) == "1")
 	opts.OnNotification = func(c *fakeserver.Conn, method string, params json.RawMessage) {
 		trace.record(method, params)
 		publisher.handle(c, method, params)
+		text.observe(method, params)
 	}
 	opts.Methods = map[string]fakeserver.Method{}
 	for method, result := range results {
@@ -120,9 +139,14 @@ func runFakeServer() int {
 		}
 	}
 
+	text.install(opts.Methods, trace.record)
+
 	// The call-graph handlers answer per item rather than with one
 	// canned result, which is what a depth-2 traversal needs.
 	installCallGraph(opts.Methods, os.Getenv(callGraphEnv), trace.record)
+	// The word server answers documentSymbol, references and implementation
+	// from the words in the files (cmd_impact_scenario_test.go).
+	installWordServer(opts.Methods, os.Getenv(wordServerEnv), trace.record)
 
 	if os.Getenv(scenarioEnv) == scenarioIndexing {
 		// A token that is created, begun, reported on — and never
@@ -148,6 +172,16 @@ func runFakeServer() int {
 		return 1
 	}
 	return 0
+}
+
+// logLine appends one line to the spawn log.
+func logLine(path, line string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(line + "\n")
+	_ = f.Close()
 }
 
 // traced is one message the scripted server received.
@@ -199,6 +233,15 @@ type scenario struct {
 	// trace, when set, is a file the server logs every received
 	// message to. Set it with scenario.traceTo.
 	trace string
+	// textOutline makes the scripted server answer documentSymbol from the
+	// text of the file it is asked about and references from a cached view of
+	// the disk (textServer).
+	textOutline bool
+	// ownServers leaves the server definitions alone. By default apply
+	// points every built-in server at the fake (useServerCommand), which
+	// is what almost every test wants; a test of the definition layers
+	// themselves builds its own.
+	ownServers bool
 }
 
 // traceTo asks the scripted server to log every message it receives to
@@ -234,11 +277,15 @@ func (s *scenario) traceTo(t *testing.T) func() []traced {
 // apply points the CLI at this test binary in scripted-server mode.
 func (s scenario) apply(t *testing.T) {
 	t.Helper()
+	retireDaemons(t)
+	t.Cleanup(func() { retireDaemons(t) })
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(serverCommandEnv, exe)
+	if !s.ownServers {
+		useServerCommand(t, exe)
+	}
 	t.Setenv(fakeServerModeEnv, "1")
 	if s.indexing {
 		t.Setenv(scenarioEnv, scenarioIndexing)
@@ -261,6 +308,11 @@ func (s scenario) apply(t *testing.T) {
 		t.Setenv(callGraphEnv, mustJSON(t, s.calls))
 	}
 	t.Setenv(traceEnv, s.trace)
+	if s.textOutline {
+		t.Setenv(outlineEnv, "1")
+	} else {
+		t.Setenv(outlineEnv, "")
+	}
 }
 
 // readOnlyCapabilities advertises everything M1's command surface

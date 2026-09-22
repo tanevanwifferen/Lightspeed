@@ -150,6 +150,7 @@ func (r *ServersReport) Installed() int {
 func Servers(ctx context.Context, opts Options) (*ServersReport, error) {
 	res := load(opts)
 	res.Probe(ctx, opts)
+	res.StartProbe(ctx, opts)
 	return res.ServersReport(), nil
 }
 
@@ -227,6 +228,7 @@ func (r *DoctorReport) OK() bool { return !r.Worst().Worse(SeverityInfo) }
 func Doctor(ctx context.Context, paths []string, opts Options) (*DoctorReport, error) {
 	res := load(opts)
 	res.Probe(ctx, opts)
+	res.StartProbe(ctx, opts)
 
 	report := &DoctorReport{
 		Servers:    res.ServersReport().Servers,
@@ -360,13 +362,20 @@ func serverChecks(res *Resolution) []Check {
 	for _, s := range res.Servers {
 		check := Check{ID: CheckServerBinary, Subject: s.Name()}
 		switch {
+		case s.Installed() && s.Binary.Note != "":
+			// It runs, but not the way a shell would: say so, and how to
+			// make the shell agree.
+			check.Severity = SeverityWarn
+			check.Message = fmt.Sprintf("%s: %s (%s)", s.Binary.Name, s.Binary.Path, s.Binary.Source)
+			check.Detail = s.Binary.Note
+			check.Fix = s.Binary.Fix
 		case s.Installed():
 			check.Severity = SeverityOK
 			check.Message = fmt.Sprintf("%s: %s (%s)", s.Binary.Name, s.Binary.Path, s.Binary.Source)
 		case s.Binary.Path != "":
 			check.Severity = SeverityError
 			check.Message = fmt.Sprintf("%s is at %s but cannot be run: %s", s.Binary.Name, s.Binary.Path, s.Binary.Problem)
-			check.Detail = "a shim pointing at an uninstalled version, or a file without the executable bit, looks exactly like this"
+			check.Detail = "a shim pointing at an uninstalled version, a binary with a missing library, or a file without the executable bit, looks exactly like this"
 			check.Fix = s.InstallCommand()
 		default:
 			check.Severity = SeverityWarn

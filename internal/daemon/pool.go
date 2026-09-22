@@ -59,8 +59,23 @@ type PoolOptions struct {
 	ShutdownTimeout time.Duration
 
 	// Gate configures the readiness gate of every session
-	// (PLAN §5.2).
+	// (PLAN §5.2). A request may override its timeout and settle
+	// window for itself; see Request.GateTimeout.
 	Gate client.GateOptions
+
+	// Capabilities are the client capabilities every session
+	// advertises in its handshake; nil means
+	// client.DefaultClientCapabilities.
+	//
+	// It is one set for the whole pool, deliberately. A pooled
+	// session is shared by every command that asks about its
+	// workspace, so its handshake cannot depend on which command
+	// happened to start it: a `rename` that reached a session
+	// started by `references` would find the resource operations it
+	// needs were never advertised. The caller therefore passes the
+	// union of what its commands can honour, and the pool honours the
+	// server-to-client half of it (see sessionHooks).
+	Capabilities map[string]any
 
 	// Docstore configures the per-session open-document store.
 	Docstore docstore.Options
@@ -68,6 +83,14 @@ type PoolOptions struct {
 	// Stderr receives the language servers' stderr. Nil discards it.
 	// It must never be the stdout carrying the JSON envelope.
 	Stderr io.Writer
+
+	// ConfigID identifies the server definitions Router was built
+	// from. It is opaque to this package: the daemon reports it in its
+	// status and handshake, and [Options.ConfigID] on the client side
+	// is compared against it, which is how a daemon that was started
+	// before a configuration file changed is recognised as stale
+	// (docs/DECISIONS.md D17). Empty means "not tracked".
+	ConfigID string
 
 	// Logf logs pool events (spawns, reaps, deaths). Nil discards.
 	Logf func(format string, args ...any)
@@ -144,6 +167,7 @@ type poolEntry struct {
 	inst  *Instance
 	sess  *client.Session
 	docs  *docstore.Store
+	hooks *sessionHooks
 
 	// Guarded by Pool.mu.
 	started  time.Time
@@ -177,13 +201,16 @@ func (p *Pool) Spawns() int64 { return p.spawns.Load() }
 // and optionally the language id to assume and the server definition
 // to insist on.
 type Target struct {
-	// Path is the file or directory the request concerns.
-	Path string
+	// Path is the file or directory the request concerns. It must be
+	// absolute when it crosses the socket: the daemon's working
+	// directory is whatever the client that started it happened to
+	// have, and means nothing to a later one.
+	Path string `json:"path"`
 	// LanguageID overrides language detection; "" means detect.
-	LanguageID string
+	LanguageID string `json:"language_id,omitempty"`
 	// Server, if set, is the server definition name to use, rather
 	// than the highest-priority one that claims the path.
-	Server string
+	Server string `json:"server,omitempty"`
 }
 
 // A Lease is a borrowed session. It exists so that a request in flight
@@ -205,6 +232,10 @@ func (l *Lease) Session() *client.Session { return l.entry.sess }
 // Docs returns the session's open-document store. Documents stay open
 // across requests, which is half of what makes the second query fast.
 func (l *Lease) Docs() *docstore.Store { return l.entry.docs }
+
+// hooks returns what the session records of the server's own traffic:
+// the diagnostics it published and the workspace edits it pushed.
+func (l *Lease) hooks() *sessionHooks { return l.entry.hooks }
 
 // Server returns the definition serving this lease.
 func (l *Lease) Server() *serverdef.ServerDef { return l.entry.def }
@@ -343,6 +374,7 @@ func (p *Pool) start(e *poolEntry) {
 	p.opts.Logf("spawning %s for %s", e.def.Name, e.root)
 
 	launch := launcherFor(p.opts.Launcher, p.opts.Stderr)
+	hooks := newSessionHooks()
 	inst, err := launch(ctx, e.def, e.root)
 	if err != nil {
 		e.err = classifyLaunchError(e.def, err)
@@ -355,6 +387,9 @@ func (p *Pool) start(e *poolEntry) {
 		InitializationOptions: initOptions(e.def),
 		Settings:              settings(e.def),
 		Gate:                  p.opts.Gate,
+		Capabilities:          p.opts.Capabilities,
+		OnRequest:             hooks.onRequest,
+		OnNotification:        hooks.onNotification,
 	})
 	if err != nil {
 		// The process is up but useless; reap it before giving up,
@@ -364,19 +399,20 @@ func (p *Pool) start(e *poolEntry) {
 		if inst.Wait != nil {
 			_ = inst.Wait(reapCtx)
 		}
-		e.err = &Error{
-			Code:    CodeSpawnFailed,
-			Message: fmt.Sprintf("server %q: initialize failed: %v", e.def.Name, err),
-			Exit:    exitCrash,
-			Server:  e.def.Name,
-			Root:    e.root,
+		// Reaped, the process can say why it went: a server that died
+		// during startup left its reason in its exit status and stderr.
+		var rep client.ExitReport
+		if inst.Report != nil {
+			rep = inst.Report()
 		}
+		e.err = spawnFailure(e.def, e.root, err, rep)
 		p.forget(e)
 		return
 	}
 
 	e.inst = inst
 	e.sess = sess
+	e.hooks = hooks
 	e.docs = docstore.New(sess, p.opts.Docstore)
 	p.spawns.Add(1)
 
@@ -435,6 +471,26 @@ func (p *Pool) lease(e *poolEntry) (*Lease, bool) {
 	p.inflight++
 	e.lastUse = time.Now()
 	return &Lease{pool: p, entry: e, warm: warm}, true
+}
+
+// eachLive calls fn with a lease on every running session, one at a time. A
+// session that is still starting, is dead or is going away is skipped: it has
+// nothing to be told, or will read the disk fresh when it comes up.
+func (p *Pool) eachLive(fn func(*Lease)) {
+	p.mu.Lock()
+	var live []*poolEntry
+	for _, e := range p.entries {
+		if e.startFinished() && !e.dead && e.sess != nil {
+			live = append(live, e)
+		}
+	}
+	p.mu.Unlock()
+	for _, e := range live {
+		if lease, ok := p.lease(e); ok {
+			fn(lease)
+			lease.Release()
+		}
+	}
 }
 
 // forget drops a failed entry from the map so the next request may try

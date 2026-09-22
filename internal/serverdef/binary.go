@@ -95,6 +95,21 @@ type Binary struct {
 	// Probed reports that the lookup actually happened, so that a
 	// zero Binary is not mistaken for "missing".
 	Probed bool `json:"probed"`
+	// Note is provenance worth saying aloud when the executable is not
+	// the one the name would have given: a mise shim that resolves to
+	// nothing in this workspace and the installed version that was
+	// launched instead.
+	Note string `json:"note,omitempty"`
+	// Fix is the argv that repairs a binary that is not runnable, when it
+	// is more specific than the definition's install spec: `mise use -g`
+	// of the version mise already has, for a shim with none active. Empty
+	// means [ServerDef.Install] is the answer.
+	Fix []string `json:"fix,omitempty"`
+	// StartProbe is the outcome of trying to start the executable (see
+	// [Resolution.StartProbe]): "" when it was not tried, "ok" when it
+	// exited 0, "started" when it ran and exited non-zero without one of
+	// the signs of a broken install, "failed" when it could not start.
+	StartProbe string `json:"start_probe,omitempty"`
 }
 
 func (b Binary) String() string {
@@ -138,6 +153,9 @@ func probeBinary(ctx context.Context, def *ServerDef, opts Options, mise MiseSta
 		b.Path = path
 		b.Runnable, b.Problem = executable(path)
 		if b.Runnable {
+			if isMiseShim(path, opts) {
+				return verifyShim(ctx, def, b, opts, mise)
+			}
 			return b
 		}
 		// Fall through: a broken shim on PATH may still have a real

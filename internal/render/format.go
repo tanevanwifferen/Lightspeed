@@ -124,6 +124,14 @@ type Options struct {
 	// ToolVersion is reported as the SARIF driver version. Empty omits
 	// the field.
 	ToolVersion string
+
+	// VerboseLocations restores uri, the LSP range and byte offsets on
+	// every location result (--verbose-locations, MCP verbose_locations).
+	// The default omits them: path plus 1-based start/end line/column
+	// plus text is what every consumer has actually used, and
+	// uri/range/offset are reachable but no longer paid for on every row
+	// (docs/DECISIONS.md D45).
+	VerboseLocations bool
 }
 
 // validate rejects nonsensical options as a usage error rather than

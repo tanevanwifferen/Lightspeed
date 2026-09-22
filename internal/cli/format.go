@@ -53,7 +53,7 @@ func formatCommand(e *env, c *command, args []string) int {
 	if err != nil {
 		return e.fail(err)
 	}
-	match, err := commonWorkspace(paths, common.server)
+	match, err := commonWorkspace(e, paths, common.server)
 	if err != nil {
 		return e.fail(err)
 	}
@@ -66,10 +66,9 @@ func formatCommand(e *env, c *command, args []string) int {
 		}
 	}
 
-	var collector editCollector
-	connectCtx, cancelConnect := context.WithTimeout(context.Background(), common.timeout)
+	connectCtx, cancelConnect := context.WithTimeout(e.base(), common.timeout)
 	defer cancelConnect()
-	s, err := startSessionWith(connectCtx, e, match, mutationSession(common, &collector))
+	s, err := startSessionWith(connectCtx, e, match, mutationSession(common))
 	if err != nil {
 		return e.fail(err)
 	}
@@ -81,7 +80,7 @@ func formatCommand(e *env, c *command, args []string) int {
 		if err != nil {
 			return e.fail(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), common.timeout+gateSlack)
+		ctx, cancel := context.WithTimeout(e.base(), common.timeout+gateSlack)
 		res, err := s.query(ctx, c.Method, map[string]any{
 			"textDocument": map[string]any{"uri": string(doc.URI)},
 			"options": map[string]any{
@@ -113,9 +112,10 @@ func formatCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 	return e.writeMutation(&mf, editOutcome{
-		tx:     tx,
-		format: format,
-		opts:   common.renderOptions(warnings),
+		session: s,
+		tx:      tx,
+		format:  format,
+		opts:    common.renderOptions(s.match.Root, warnings),
 		// A file that is already formatted needs no edits, and that is
 		// the command succeeding rather than finding a problem.
 		emptyIsProblem: false,
@@ -149,13 +149,13 @@ func formatTargets(args []string) ([]string, error) {
 
 // commonWorkspace resolves every path and insists they agree on one
 // server and one root.
-func commonWorkspace(paths []string, serverName string) (router.Match, error) {
-	first, err := resolveTarget(paths[0], "", serverName)
+func commonWorkspace(e *env, paths []string, serverName string) (router.Match, error) {
+	first, err := e.resolveTarget(paths[0], "", serverName)
 	if err != nil {
 		return router.Match{}, err
 	}
 	for _, path := range paths[1:] {
-		match, err := resolveTarget(path, "", serverName)
+		match, err := e.resolveTarget(path, "", serverName)
 		if err != nil {
 			return router.Match{}, err
 		}

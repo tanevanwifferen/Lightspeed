@@ -62,12 +62,25 @@
 // than both half-bound. A socket owned by another user is refused
 // outright, as in gopls's verifyRemoteOwnership.
 //
+// # A shared session
+//
+// A pooled session is shared by every command that asks about its
+// workspace, so nothing about it can be per-command. The pool
+// advertises one set of client capabilities (see
+// [PoolOptions.Capabilities]), records what the server pushes — its
+// workspace/applyEdit requests while a request asks to collect them,
+// its published diagnostics always ([sessionHooks]) — and takes the
+// readiness gate's timeout and settle window with each request. A
+// command describes the session it got with [Handle.Session], announces
+// its documents *with their content* with [Handle.Open] and closes them
+// again with [Handle.CloseDocuments], so that a warm server goes back
+// to reading the disk. docs/DECISIONS.md D15 has the reasoning.
+//
 // # What is not here
 //
-// Command wiring. This package exposes an API; `lightspeed daemon
-// serve|status|stop` and the `--no-daemon` flag belong to
-// internal/cli. Position mapping is also absent: requests carry LSP
-// params verbatim, and byte-column to UTF-16 conversion stays with
-// the caller, which can do it with internal/docstore without a server
-// (see the deferrals in the M3 notes).
+// Command wiring lives in internal/cli, which owns `lightspeed daemon
+// serve|status|stop|logs` and the `--no-daemon` flag. Position mapping
+// is also absent: requests carry LSP params verbatim, and byte-column
+// to UTF-16 conversion stays with the caller, which can do it with
+// internal/docstore without a server.
 package daemon

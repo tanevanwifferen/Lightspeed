@@ -65,6 +65,14 @@ type Match struct {
 	// MatchedGlob is the activation glob that claimed the path, or
 	// "" when the language id alone did.
 	MatchedGlob string
+
+	// Path is the canonical absolute path that was resolved. Handing
+	// it, with LanguageID, to another router built from the same
+	// definitions — the daemon's — reproduces this decision, which is
+	// what lets a client resolve a path once for its own purposes and
+	// name the same server to a process with a different working
+	// directory.
+	Path string
 }
 
 // Fallback reports whether Root is the file's own directory because no
@@ -179,6 +187,7 @@ func (r *Router) ResolveAs(path, languageID string) ([]Match, error) {
 			RootMarker:  marker,
 			LanguageID:  languageID,
 			MatchedGlob: glob,
+			Path:        abs,
 		})
 	}
 	if len(matches) == 0 {
@@ -186,6 +195,35 @@ func (r *Router) ResolveAs(path, languageID string) ([]Match, error) {
 	}
 	sortMatches(matches)
 	return matches, nil
+}
+
+// Claim says which definition handles the file rel, a path relative to root,
+// or nil when none does. It is [Resolve]'s decision without the work of finding
+// the file's own project root, which a caller that only wants to know *whether
+// and by whom* a whole tree of files is handled cannot afford per file: the
+// language id claims a file, or an activation glob does, matched against the
+// path relative to root. The definition returned is the one [Resolve] ranks
+// first (priority, then name); the session a request would be served by — which
+// depends on the file's project root — is still the pool's to pick.
+func (r *Router) Claim(root, rel string) *serverdef.ServerDef {
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+	languageID := LanguageID(abs)
+	var matches []Match
+	for _, e := range r.entries {
+		byLanguage := languageID != "" && slices.Contains(e.def.Activation.Languages, languageID)
+		if !byLanguage && len(e.globs) == 0 {
+			continue
+		}
+		if !byLanguage && e.matchGlob(root, abs) == nil {
+			continue
+		}
+		matches = append(matches, Match{Server: e.def})
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	sortMatches(matches)
+	return matches[0].Server
 }
 
 // A Group is one server session's worth of work: the paths from a

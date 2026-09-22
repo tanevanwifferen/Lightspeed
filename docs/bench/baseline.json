@@ -1,0 +1,57 @@
+[
+  {
+    "label": "01_outline",
+    "bytes": 2012,
+    "words": 65
+  },
+  {
+    "label": "02_source",
+    "bytes": 26740,
+    "words": 2500
+  },
+  {
+    "label": "03_references",
+    "bytes": 1034,
+    "words": 27
+  },
+  {
+    "label": "04_search_symbols",
+    "bytes": 3889,
+    "words": 188
+  },
+  {
+    "label": "05_search_text",
+    "bytes": 2922,
+    "words": 131
+  },
+  {
+    "label": "06_tree",
+    "bytes": 25117,
+    "words": 1
+  },
+  {
+    "label": "07_repo_outline",
+    "bytes": 2919,
+    "words": 29
+  },
+  {
+    "label": "08_importers",
+    "bytes": 5804,
+    "words": 16
+  },
+  {
+    "label": "09_task",
+    "bytes": 3150,
+    "words": 137
+  },
+  {
+    "label": "10_context",
+    "bytes": 4526,
+    "words": 535
+  },
+  {
+    "label": "11_resolve",
+    "bytes": 1630,
+    "words": 21
+  }
+]

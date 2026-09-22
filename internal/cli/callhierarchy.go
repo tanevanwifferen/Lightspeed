@@ -86,10 +86,7 @@ func callHierarchyCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	q, cleanup, err := prepareWith(e, common, locArg, sessionOptions{
-		gate:         common.gateOptions(),
-		capabilities: callHierarchyCapabilities(),
-	})
+	q, cleanup, err := prepareWith(e, common, locArg, sessionOptions{gate: common.gateOptions()})
 	defer cleanup()
 	if err != nil {
 		return e.fail(err)
@@ -124,6 +121,13 @@ func callHierarchyCommand(e *env, c *command, args []string) int {
 	}
 
 	walker := &callWalker{q: q, depth: depth}
+	// Each row is a declaration, so each can carry the id of the symbol it
+	// declares; the root anchors the ids like everywhere else (D21).
+	if root, err := commandWorkspace(sf.path); err != nil {
+		return e.fail(err)
+	} else {
+		walker.ids = newIDIndex(e, q.session, root)
+	}
 	rs := render.ResultSet{Kind: "call_hierarchy"}
 	if direction == directionIncoming || direction == directionBoth {
 		if err := walker.walk(&rs, items[0], methodIncomingCalls, 1); err != nil {
@@ -147,12 +151,13 @@ func callHierarchyCommand(e *env, c *command, args []string) int {
 			"%d branch(es) were not expanded because they lead back to a symbol already shown", walker.cycles))
 	}
 	warnings = append(warnings, walker.warnings...)
+	warnings = append(warnings, walker.ids.summary()...)
 
 	// The order is the traversal order, and it is not sorted: a
 	// hierarchy read depth-first is a hierarchy, and sorting it by
 	// path would leave a flat list of locations whose indentation
 	// means nothing.
-	return e.writeResults(format, rs, common.renderOptions(warnings))
+	return e.writeResults(format, rs, common.renderOptions(q.session.match.Root, warnings))
 }
 
 // callHierarchyCapabilities advertise textDocument.callHierarchy.
@@ -200,6 +205,8 @@ type callWalker struct {
 	cycles    int
 	truncated bool
 	warnings  []string
+	// ids names the symbol each row declares.
+	ids *idIndex
 }
 
 // reset clears the visited set between directions, so that the
@@ -284,6 +291,7 @@ func (w *callWalker) result(call callRelation, method string, depth int) (render
 		return render.Result{}, fmt.Errorf("dropped %q in %s: %v", item.Name, item.URI, err)
 	}
 	return render.Result{
+		ID:     w.ids.idAt(item.URI, item.SelectionRange),
 		Span:   span,
 		Kind:   symbolKindName(item.Kind),
 		Label:  callLabel(method, depth, item.Name),

@@ -52,6 +52,10 @@ type Options struct {
 	// run through it.
 	Run Runner
 
+	// Start runs a server's executable once to see whether it starts
+	// ([Resolution.StartProbe]). Nil means a real os/exec.
+	Start StartRunner
+
 	// PathCheck reports which servers claim a path, for [Doctor]. It
 	// is a function rather than a router because internal/router
 	// imports this package, and the dependency must not point both
@@ -188,9 +192,14 @@ func (r *Resolved) Shadowed() []Override {
 	return r.Overrides[1:]
 }
 
-// InstallCommand is the argv that would install this server, or nil if
-// its definition names no install spec. It is data, never run here.
+// InstallCommand is the argv that would make this server usable: the
+// specific repair a probe found ([Binary.Fix], `mise use -g` of a version
+// mise already has), else the definition's install spec, nil if it names
+// none. It is data, never run here.
 func (r *Resolved) InstallCommand() []string {
+	if len(r.Binary.Fix) > 0 {
+		return r.Binary.Fix
+	}
 	if r.Def.Install.Mise == "" {
 		return nil
 	}

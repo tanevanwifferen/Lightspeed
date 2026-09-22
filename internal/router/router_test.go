@@ -660,3 +660,39 @@ func TestRelativeTo(t *testing.T) {
 		}
 	}
 }
+
+// Claim is Resolve's decision without the search for a project root: the same
+// definition wins for the same file, and a file nothing claims has none.
+func TestClaimAgreesWithResolve(t *testing.T) {
+	r, err := New(
+		def("gopls", 50, []string{"go"}, nil, nil),
+		def("staticcheck", 10, []string{"go"}, nil, nil),
+		def("pyright", 50, []string{"python"}, nil, nil),
+		def("cmake-ls", 50, nil, []string{"**/CMakeLists.txt"}, nil),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := newFixture(t)
+	root := filepath.Join(base, "repo")
+	cases := map[string]string{
+		"gomod/main.go":        "gopls",
+		"python/app.py":        "pyright",
+		"loose/script.py":      "pyright",
+		"gomod/CMakeLists.txt": "cmake-ls",
+		"README.md":            "",
+		"data.bin":             "",
+	}
+	for rel, want := range cases {
+		got := ""
+		if d := r.Claim(root, rel); d != nil {
+			got = d.Name
+		}
+		if got != want {
+			t.Errorf("Claim(%s) = %q, want %q", rel, got, want)
+		}
+		if matches, err := r.Resolve(filepath.Join(root, rel)); err == nil && want != "" && matches[0].Server.Name != got {
+			t.Errorf("Resolve(%s) says %s, Claim says %s", rel, matches[0].Server.Name, got)
+		}
+	}
+}

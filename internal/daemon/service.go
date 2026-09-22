@@ -1,14 +1,19 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/client"
+	"github.com/tanevanwifferen/Lightspeed/internal/docstore"
+	"github.com/tanevanwifferen/Lightspeed/internal/gopls/protocol"
 )
 
 // The methods of the daemon protocol. They are namespaced so that a
@@ -28,6 +33,27 @@ const (
 	// `gopls/handshake` does: it is how a client notices it is
 	// talking to a daemon from a different build of the binary.
 	MethodHandshake = "lightspeed/handshake"
+	// MethodSession starts (or finds) the server for a target and
+	// describes it: what it advertised, and whether it was warm. The
+	// params are a [Target], the result a [SessionInfo].
+	MethodSession = "lightspeed/session"
+	// MethodOpen announces documents to a target's server. The
+	// params are an [OpenRequest], the result an [OpenResult].
+	MethodOpen = "lightspeed/open"
+	// MethodReady waits for a target's server to finish its initial
+	// work, under the readiness gate. The params are a
+	// [ReadyRequest].
+	MethodReady = "lightspeed/ready"
+	// MethodDiagnostics reports what a target's server has published.
+	// The params are a [DiagnosticsRequest], the result a
+	// [DiagnosticsState].
+	MethodDiagnostics = "lightspeed/diagnostics"
+	// MethodClose closes documents on a target's server. The params
+	// are a [CloseRequest].
+	MethodClose = "lightspeed/close"
+	// MethodChanged tells a target's server that files changed on disk
+	// behind its back. The params are a [ChangedRequest].
+	MethodChanged = "lightspeed/changed"
 )
 
 // A Request is one query: which file it is about, and the LSP method
@@ -74,6 +100,102 @@ type Request struct {
 	// Timeout bounds the request inside the daemon. Zero leaves it
 	// to the readiness gate's own timeout.
 	Timeout time.Duration `json:"timeout_ns,omitempty"`
+
+	// GateTimeout and Settle are this request's own readiness-gate
+	// options (PLAN §4's --timeout and --settle); zero means the
+	// pool's. They are per request because a session outlives the
+	// command that started it: see client.Gate.With.
+	GateTimeout time.Duration `json:"gate_timeout_ns,omitempty"`
+	Settle      time.Duration `json:"settle_ns,omitempty"`
+
+	// CollectEdits records the workspace/applyEdit requests the
+	// server sends while this request runs, and returns them in
+	// [Response.Pushed]. It is for workspace/executeCommand: a code
+	// action that is a command has no edit until the server has run it
+	// (docs/DECISIONS.md D9). Outside such a request the session
+	// refuses applyEdit.
+	CollectEdits bool `json:"collect_edits,omitempty"`
+}
+
+// A Target and a list of documents make an [OpenRequest].
+type OpenRequest struct {
+	Target
+	Documents []DocumentSpec `json:"documents"`
+}
+
+// A DocumentSpec is one document to announce, *with its content*.
+//
+// The bytes travel because the client has already built its position
+// Mapper from them (PLAN §5.1): if the daemon re-read the file, a
+// change between the two reads would put every position one edit off
+// from the text the server is looking at. The server is told exactly
+// what the Mapper was built from.
+type DocumentSpec struct {
+	// Path is the absolute path of the file.
+	Path string `json:"path"`
+	// LanguageID is the language id sent in didOpen.
+	LanguageID string `json:"language_id"`
+	// Content is the file's bytes.
+	Content []byte `json:"content"`
+}
+
+// OpenResult is the answer to an [OpenRequest].
+type OpenResult struct {
+	// Versions holds, per requested document and in order, the
+	// version the server now has. It is the daemon's number, not the
+	// caller's: a warm session's documents were versioned by earlier
+	// commands, and a versioned edit can only be checked against the
+	// version the server actually saw.
+	Versions []int32 `json:"versions"`
+}
+
+// A CloseRequest closes documents on a target's server.
+type CloseRequest struct {
+	Target
+	// Paths are the absolute paths of the documents to close.
+	Paths []string `json:"paths"`
+}
+
+// A ChangedRequest tells a server that files changed on disk.
+type ChangedRequest struct {
+	Target
+	Files []FileChange `json:"files"`
+}
+
+// A FileChange is one file that changed on disk. Type is the LSP
+// FileChangeType: 1 created, 2 changed, 3 deleted.
+type FileChange struct {
+	Path string `json:"path"`
+	Type int    `json:"type"`
+}
+
+// A ReadyRequest waits for a server to finish its initial work.
+type ReadyRequest struct {
+	Target
+	// GateTimeout and Settle are the gate options for this wait.
+	GateTimeout time.Duration `json:"gate_timeout_ns,omitempty"`
+	Settle      time.Duration `json:"settle_ns,omitempty"`
+}
+
+// SessionInfo describes the server behind a target.
+type SessionInfo struct {
+	// Server is the definition that answered, ServerName what the
+	// process calls itself.
+	Server     string `json:"server"`
+	ServerName string `json:"server_name,omitempty"`
+	// Root is the workspace root the session was initialized with.
+	Root string `json:"root"`
+	// Initialize is the server's InitializeResult, verbatim. The
+	// client parses its capabilities itself, so that a method the
+	// server never advertised is refused before it crosses the
+	// socket and with the same error as in process.
+	Initialize json.RawMessage `json:"initialize"`
+	// Warm reports that the server was already running: false means
+	// this request paid for the spawn.
+	Warm bool `json:"warm"`
+	// Spawns is how many servers the pool has started since it came
+	// up.
+	Spawns int64 `json:"spawns"`
 }
 
 // A Response is one query's answer, with the evidence for believing it.
@@ -109,6 +231,10 @@ type Response struct {
 	// it came up. Together with Warm it is the timing-independent
 	// way to see that a warm cache was used: two queries, one spawn.
 	Spawns int64 `json:"spawns"`
+
+	// Pushed are the workspace edits the server sent while a
+	// [Request.CollectEdits] request ran.
+	Pushed []PushedEdit `json:"pushed,omitempty"`
 }
 
 // A Status describes a daemon and its pool. It is the answer to
@@ -118,6 +244,10 @@ type Status struct {
 	// PID is the daemon's process id, Executable the binary it runs.
 	PID        int    `json:"pid"`
 	Executable string `json:"executable,omitempty"`
+	// Build is the identity of that executable and the protocol it speaks.
+	// A client compares it with its own (Options.CheckBuild): a daemon left
+	// running by another binary is not one to serve this command.
+	Build Build `json:"build"`
 	// Socket is the address it listens on, empty in --no-daemon mode.
 	Socket string `json:"socket,omitempty"`
 	// InProcess reports the --no-daemon path: there is no daemon,
@@ -126,6 +256,9 @@ type Status struct {
 	// Workspace is the resolved workspace root this daemon is keyed
 	// on (PLAN §3).
 	Workspace string `json:"workspace,omitempty"`
+	// ConfigID identifies the server definitions the daemon was
+	// started with; see [PoolOptions.ConfigID].
+	ConfigID string `json:"config_id,omitempty"`
 	// Started is when the daemon came up, Uptime how long ago that
 	// was.
 	Started time.Time     `json:"started"`
@@ -150,8 +283,13 @@ type Handshake struct {
 	Executable string `json:"executable"`
 	// PID is the daemon's process id.
 	PID int `json:"pid"`
+	// Build is the daemon's build identity, as in [Status].
+	Build Build `json:"build"`
 	// Workspace is the root the daemon is keyed on.
 	Workspace string `json:"workspace,omitempty"`
+	// ConfigID identifies the server definitions the daemon was
+	// started with; see [PoolOptions.ConfigID].
+	ConfigID string `json:"config_id,omitempty"`
 	// Started is when the daemon came up.
 	Started time.Time `json:"started"`
 }
@@ -178,6 +316,45 @@ type Service struct {
 
 	// listenTimeout is reported by Status; the Server sets it.
 	listenTimeout time.Duration
+
+	// docMu guards the two maps below, and is held across the store
+	// call that follows a change to them, so that "the last holder
+	// closed it" and "a new holder opened it" cannot interleave.
+	docMu sync.Mutex
+	// holders counts, per pooled document, how many client
+	// connections have it open. The document is closed on the server
+	// only when the count returns to zero: two commands working on
+	// one file share the document, and the first to finish must not
+	// close it under the other.
+	holders map[heldDoc]int
+	// held is what each connection holds, so that a client which dies
+	// without closing (kill, crash) does not keep a document open in
+	// the warm server for good: [Service.dropConn] gives its holds
+	// back when the connection goes.
+	held map[uint64]map[heldDoc]int
+
+	// idxState is the workspace's index and the reconciliation of the servers
+	// with the disk (index.go).
+	idxState
+}
+
+// A heldDoc names a document in one pooled session. The store pointer
+// identifies the session, so a document in a server that has since
+// been replaced is not confused with the same path in its successor.
+type heldDoc struct {
+	docs *docstore.Store
+	path string
+}
+
+// A connKey is the context key under which the [Server] passes the id
+// of the connection a request arrived on. Requests that come in
+// without one — the in-process mode — are all connection 0, which
+// never goes away, and balance through Open and CloseDocuments alone.
+type connKey struct{}
+
+func connID(ctx context.Context) uint64 {
+	id, _ := ctx.Value(connKey{}).(uint64)
+	return id
 }
 
 // NewService returns a service over pool for the given workspace root.
@@ -209,6 +386,9 @@ func (s *Service) Query(ctx context.Context, req Request) (*Response, error) {
 		defer cancel()
 	}
 
+	// Before anything is asked, the servers are told what changed on disk
+	// since they were last told (D33).
+	s.reconcile(ctx)
 	lease, err := s.pool.Acquire(ctx, Target{
 		Path:       req.Path,
 		LanguageID: req.LanguageID,
@@ -234,8 +414,18 @@ func (s *Service) Query(ctx context.Context, req Request) (*Response, error) {
 		}
 	}
 
+	if req.CollectEdits {
+		collect := lease.hooks().arm()
+		defer func() { resp.Pushed = collect() }()
+	}
+
 	if req.Raw {
-		result, err := lease.Session().Call(ctx, req.Method, req.Params)
+		// The connection, not Session.Call: a raw request is the
+		// escape hatch for methods no capability covers, and for
+		// asking a server something it did not advertise. Callers
+		// that want the capability check make it themselves, against
+		// the InitializeResult [Service.Session] returned.
+		result, err := lease.Session().Conn().Call(ctx, req.Method, req.Params)
 		if err != nil {
 			return nil, s.decorate(err, lease)
 		}
@@ -243,7 +433,8 @@ func (s *Service) Query(ctx context.Context, req Request) (*Response, error) {
 		return resp, nil
 	}
 
-	q, err := lease.Session().Query(ctx, req.Method, req.Params)
+	gate := client.GateOptions{Timeout: req.GateTimeout, Settle: req.Settle}
+	q, err := lease.Session().QueryWith(ctx, req.Method, req.Params, gate)
 	if err != nil {
 		return nil, s.decorate(err, lease)
 	}
@@ -291,9 +482,11 @@ func (s *Service) Status(ctx context.Context) (*Status, error) {
 	st := &Status{
 		PID:                os.Getpid(),
 		Executable:         exe,
+		Build:              SelfBuild(),
 		Socket:             s.socket,
 		InProcess:          s.socket == "",
 		Workspace:          s.workspace,
+		ConfigID:           s.pool.opts.ConfigID,
 		Started:            s.started,
 		Uptime:             time.Since(s.started),
 		Requests:           s.requests.Load(),
@@ -334,7 +527,9 @@ func (s *Service) handshake() *Handshake {
 	return &Handshake{
 		Executable: exe,
 		PID:        os.Getpid(),
+		Build:      SelfBuild(),
 		Workspace:  s.workspace,
+		ConfigID:   s.pool.opts.ConfigID,
 		Started:    s.started,
 	}
 }
@@ -350,6 +545,48 @@ func (s *Service) dispatch(ctx context.Context, method string, params json.RawMe
 			return nil, err
 		}
 		return s.Query(ctx, req)
+	case MethodSession:
+		var t Target
+		if err := decode(params, &t); err != nil {
+			return nil, err
+		}
+		return s.Session(ctx, t)
+	case MethodOpen:
+		var req OpenRequest
+		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		return s.Open(ctx, req)
+	case MethodReady:
+		var req ReadyRequest
+		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.Ready(ctx, req)
+	case MethodChanged:
+		var req ChangedRequest
+		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.FilesChanged(ctx, req)
+	case MethodClose:
+		var req CloseRequest
+		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.CloseDocuments(ctx, req)
+	case MethodDiagnostics:
+		var req DiagnosticsRequest
+		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		return s.Diagnostics(ctx, req)
+	case MethodIndex:
+		var req IndexRequest
+		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		return s.Index(ctx, req)
 	case MethodStatus:
 		return s.Status(ctx)
 	case MethodStop:
@@ -372,4 +609,221 @@ func decode(params json.RawMessage, v any) error {
 		}
 	}
 	return nil
+}
+
+// acquire is Pool.Acquire behind the checks every session-level
+// request shares.
+func (s *Service) acquire(ctx context.Context, t Target) (*Lease, error) {
+	s.reconcile(ctx)
+	lease, err := s.pool.Acquire(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	s.requests.Add(1)
+	return lease, nil
+}
+
+// Session starts — or finds — the server for a target and describes
+// it. A command calls this first: what the server advertised decides
+// which methods it may send at all.
+func (s *Service) Session(ctx context.Context, t Target) (*SessionInfo, error) {
+	lease, err := s.acquire(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+	return &SessionInfo{
+		Server:     lease.Server().Name,
+		ServerName: lease.Session().ServerName(),
+		Root:       lease.Root(),
+		Initialize: lease.Session().Capabilities().Raw(),
+		Warm:       lease.Warm(),
+		Spawns:     s.pool.Spawns(),
+	}, nil
+}
+
+// Open announces documents to the target's server, with the content
+// the caller built its positions from.
+//
+// A document that is already open with identical content costs
+// nothing, and one whose content changed is pushed as a didChange
+// (internal/docstore). Either way the file's recorded diagnostics are
+// dropped first when the content is new to the server — before the
+// notification is sent, because the server may publish the moment it
+// receives it, and dropping afterwards could discard the very answer
+// being waited for.
+func (s *Service) Open(ctx context.Context, req OpenRequest) (*OpenResult, error) {
+	lease, err := s.acquire(ctx, req.Target)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+
+	out := &OpenResult{Versions: make([]int32, 0, len(req.Documents))}
+	for _, spec := range req.Documents {
+		if !filepath.IsAbs(spec.Path) {
+			return nil, &Error{
+				Code:    CodeUsage,
+				Message: fmt.Sprintf("daemon: document path %q is not absolute; the daemon's working directory is not the caller's", spec.Path),
+				Exit:    exitUsage,
+			}
+		}
+		doc, err := s.openHeld(ctx, lease, spec)
+		if err != nil {
+			return nil, err
+		}
+		out.Versions = append(out.Versions, doc.Version)
+	}
+	return out, nil
+}
+
+// openHeld opens one document and records the calling connection as a
+// holder of it.
+func (s *Service) openHeld(ctx context.Context, lease *Lease, spec DocumentSpec) (*docstore.Document, error) {
+	key := heldDoc{docs: lease.Docs(), path: filepath.Clean(spec.Path)}
+	s.docMu.Lock()
+	defer s.docMu.Unlock()
+
+	prev, had := key.docs.Get(spec.Path)
+	unchanged := had && prev.Open && bytes.Equal(prev.Content, spec.Content)
+	if !unchanged {
+		lease.hooks().forget(protocol.URIFromPath(spec.Path))
+	}
+	doc, err := key.docs.OpenContent(spec.Path, spec.LanguageID, spec.Content)
+	if err != nil {
+		return nil, s.decorate(err, lease)
+	}
+	if s.holders == nil {
+		s.holders = map[heldDoc]int{}
+		s.held = map[uint64]map[heldDoc]int{}
+	}
+	id := connID(ctx)
+	if s.held[id] == nil {
+		s.held[id] = map[heldDoc]int{}
+	}
+	s.held[id][key]++
+	s.holders[key]++
+	return doc, nil
+}
+
+// dropConn gives back everything a connection held, closing the
+// documents nobody else holds. The [Server] calls it when a connection
+// ends, whether the client said goodbye or was killed.
+func (s *Service) dropConn(id uint64) {
+	s.docMu.Lock()
+	defer s.docMu.Unlock()
+	for key, n := range s.held[id] {
+		if s.holders[key] -= n; s.holders[key] <= 0 {
+			delete(s.holders, key)
+			_ = key.docs.Close(key.path) // the session may be gone already
+		}
+	}
+	delete(s.held, id)
+}
+
+// CloseDocuments closes documents on the target's server, so that a
+// warm session is left with the document set it started with.
+//
+// A command opens what it needs with the bytes it read, and the server
+// then answers about *those* bytes, not about the disk, for as long as
+// the document stays open. Left open, the next command — or an editor,
+// or `git checkout` — would change the file under a server that keeps
+// answering from the copy it was given: the stale-authority failure of
+// PLAN §5.2 arriving by a different road. Each command therefore closes
+// what it opened, and the server goes back to the disk. The first
+// failure is returned once every path has been tried.
+//
+// A document is closed when its last holder lets go, not the first: a
+// second command that opened the same file meanwhile keeps its copy
+// until it, too, closes or its connection drops (see [Service.dropConn]).
+func (s *Service) CloseDocuments(ctx context.Context, req CloseRequest) error {
+	lease, err := s.acquire(ctx, req.Target)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
+	var first error
+	s.docMu.Lock()
+	defer s.docMu.Unlock()
+	id := connID(ctx)
+	for _, path := range req.Paths {
+		key := heldDoc{docs: lease.Docs(), path: filepath.Clean(path)}
+		if s.held[id][key] > 0 {
+			if s.held[id][key]--; s.held[id][key] == 0 {
+				delete(s.held[id], key)
+			}
+			s.holders[key]--
+		}
+		if s.holders[key] > 0 {
+			continue // another command still has it open
+		}
+		delete(s.holders, key)
+		if err := key.docs.Close(path); err != nil && first == nil {
+			first = s.decorate(err, lease)
+		}
+	}
+	return first
+}
+
+// FilesChanged tells the target's server that files changed on disk
+// with workspace/didChangeWatchedFiles.
+//
+// In an editor the *editor* watches the tree and sends these. Nothing
+// watches it here, and a server that outlives a command would otherwise
+// keep answering from what it last read of a file that `rename --apply`
+// has since rewritten — a stale answer that looks authoritative, which
+// is the failure PLAN §5.2 exists to prevent, arriving by writing
+// instead of by indexing. So a command that writes says so. It is a
+// notification: a server that ignores it costs nothing.
+func (s *Service) FilesChanged(ctx context.Context, req ChangedRequest) error {
+	// The files this request names are told to the servers by this request,
+	// with the type the caller knows; the reconciliation (D33) tells them
+	// about everything else that changed.
+	told := make(map[string]bool, len(req.Files))
+	for _, f := range req.Files {
+		if rel, err := filepath.Rel(s.workspace, f.Path); err == nil {
+			told[filepath.ToSlash(rel)] = true
+		}
+	}
+	s.reconcileExcept(ctx, told)
+	lease, err := s.pool.Acquire(ctx, req.Target)
+	if err != nil {
+		return err
+	}
+	s.requests.Add(1)
+	defer lease.Release()
+	changes := make([]map[string]any, 0, len(req.Files))
+	for _, f := range req.Files {
+		changes = append(changes, map[string]any{"uri": string(protocol.URIFromPath(f.Path)), "type": f.Type})
+	}
+	if err := lease.Session().Notify("workspace/didChangeWatchedFiles", map[string]any{"changes": changes}); err != nil {
+		return s.decorate(err, lease)
+	}
+	return nil
+}
+
+// Ready waits for the target's server to finish its initial work, or
+// reports a not-ready error (exit 5) if it does not in time.
+func (s *Service) Ready(ctx context.Context, req ReadyRequest) error {
+	lease, err := s.acquire(ctx, req.Target)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
+	gate := client.GateOptions{Timeout: req.GateTimeout, Settle: req.Settle}
+	if err := lease.Session().AwaitReadyWith(ctx, gate); err != nil {
+		return s.decorate(err, lease)
+	}
+	return nil
+}
+
+// Diagnostics reports what the target's server has published about
+// some files.
+func (s *Service) Diagnostics(ctx context.Context, req DiagnosticsRequest) (*DiagnosticsState, error) {
+	lease, err := s.acquire(ctx, req.Target)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.Release()
+	return lease.hooks().state(req.URIs, req.Snapshot), nil
 }

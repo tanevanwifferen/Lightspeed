@@ -175,7 +175,7 @@ func (e *env) runBatchLine(index int, line string, indent bool) int {
 	// server logs and usage text still arrive where a human is
 	// looking. It gets no stdin: see batchInput.
 	var out strings.Builder
-	sub := &env{stdout: &out, stderr: e.stderr}
+	sub := &env{stdout: &out, stderr: e.stderr, noDaemon: e.noDaemon, offline: e.offline, configs: e.configCache(), ctx: e.ctx}
 	query.Exit = c.Run(sub, c, argv[1:])
 	e.writeBatchLine(query, out.String(), indent)
 	return query.Exit

@@ -82,8 +82,14 @@ func FailError(w io.Writer, err error, warnings ...string) error {
 		Error:    &Error{Code: CodeForError(err), Message: message(err)},
 	}
 	var coded *CodedError
-	if errors.As(err, &coded) {
+	var detailed interface{ ErrorDetails() any }
+	switch {
+	case errors.As(err, &coded):
 		e.Error.Data = coded.Details
+	case errors.As(err, &detailed):
+		// An error from another package that cannot import this one
+		// (the daemon's, which crossed a socket) supplies its own.
+		e.Error.Data = detailed.ErrorDetails()
 	}
 	return WriteEnvelope(w, e, Options{})
 }

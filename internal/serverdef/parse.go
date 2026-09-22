@@ -75,7 +75,7 @@ func ParseFragments(data []byte) ([]*Fragment, error) {
 }
 
 func decodeFile(raw map[string]any) ([]*Fragment, error) {
-	if err := checkKeys("", raw, "schema_version", "name", "servers", "activation", "server", "install"); err != nil {
+	if err := checkKeys("", raw, "schema_version", "name", "servers", "activation", "server", "install", DeadCodeTable); err != nil {
 		return nil, err
 	}
 
@@ -95,6 +95,11 @@ func decodeFile(raw map[string]any) ([]*Fragment, error) {
 		return nil, err
 	}
 	if servers == nil {
+		if onlyToolSettings(raw) {
+			// A file that only carries [dead_code] defines no server: it is a
+			// setting of a command, not a definition (deadcode.go).
+			return nil, nil
+		}
 		frag, err := decodeSingle(raw, version)
 		if err != nil {
 			return nil, err
@@ -155,7 +160,7 @@ func decodeMulti(raw, servers map[string]any, version int) ([]*Fragment, error) 
 func decodeFragment(prefix, name string, version int, tbl map[string]any) (*Fragment, error) {
 	allowed := []string{"activation", "server", "install"}
 	if prefix == "" {
-		allowed = append([]string{"schema_version", "name"}, allowed...)
+		allowed = append([]string{"schema_version", "name", DeadCodeTable}, allowed...)
 	}
 	if err := checkKeys(prefix, tbl, allowed...); err != nil {
 		return nil, err

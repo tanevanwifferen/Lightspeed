@@ -6,124 +6,116 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/client"
+	"github.com/tanevanwifferen/Lightspeed/internal/daemon"
 	"github.com/tanevanwifferen/Lightspeed/internal/render"
 )
 
-// defaultServerCommand is the hardcoded M0 server (PLAN §8 M0: "raw
-// works end to end against a hardcoded server"). Replaced by the
-// router + serverdef resolution in M4.
-var defaultServerCommand = []string{"gopls", "serve"}
-
-// serverCommandEnv overrides the hardcoded server command; it exists
-// so hermetic tests can point the CLI at the fake server. M0
-// scaffolding, see docs/DECISIONS.md D4.
-const serverCommandEnv = "LIGHTSPEED_SERVER_CMD"
-
 // rawCommand implements `lightspeed raw <method> [--params <json>]`:
-// spawn the server, initialize, send one request, print the result in
-// the JSON envelope, shut down.
-func rawCommand(args []string, stdout, stderr io.Writer) int {
+// find or start the server for --path, send one request without the
+// readiness gate or the capability check, and print the result in the
+// JSON envelope.
+//
+// It is the escape hatch, so it may call anything — including methods
+// no capability covers and methods the server never advertised — and it
+// is not gated: whatever the server says is what is printed, empty or
+// not. Since M3 it routes like every other command, by --path (default
+// the working directory) instead of the M0 hardcoded `gopls serve`.
+func rawCommand(e *env, c *command, args []string) int {
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(stderr, "usage: lightspeed raw <method> [--params <json>] [--timeout <duration>]")
-		return usage(stdout, "raw: missing <method> argument")
+		fmt.Fprintln(e.stderr, "usage: lightspeed raw <method> [--params <json>] [--path <file|dir>] [--timeout <duration>]")
+		return usage(e.stdout, "raw: missing <method> argument")
 	}
 	method := args[0]
 
 	fs := flag.NewFlagSet("raw", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(e.stderr)
 	params := fs.String("params", "", "JSON parameters for the request")
 	timeout := fs.Duration("timeout", 30*time.Second, "overall deadline for the request")
+	path := fs.String("path", ".", "file or directory that selects the server and the workspace")
+	language := fs.String("language", "", "language id of the target, when nothing in it identifies one")
+	serverName := fs.String("server", "", "name of the server to use when several claim the target")
+	noDaemon := fs.Bool("no-daemon", false, "run the language server inside this process instead of the workspace's shared daemon")
+	offline := fs.Bool("offline", false, offlineUsage)
 	if err := fs.Parse(args[1:]); err != nil {
-		return usage(stdout, fmt.Sprintf("raw: %v", err))
+		return usage(e.stdout, fmt.Sprintf("raw: %v", err))
 	}
 	if fs.NArg() > 0 {
-		return usage(stdout, fmt.Sprintf("raw: unexpected arguments %q", fs.Args()))
+		return usage(e.stdout, fmt.Sprintf("raw: unexpected arguments %q", fs.Args()))
+	}
+	if *noDaemon {
+		e.noDaemon = true
+	}
+	if *offline {
+		e.offline = true
 	}
 
 	var paramsRaw json.RawMessage
 	if *params != "" {
 		if !json.Valid([]byte(*params)) {
-			return usage(stdout, "raw: --params is not valid JSON")
+			return usage(e.stdout, "raw: --params is not valid JSON")
 		}
 		paramsRaw = json.RawMessage(*params)
 	}
 
-	argv := defaultServerCommand
-	if env := os.Getenv(serverCommandEnv); env != "" {
-		argv = strings.Fields(env)
+	match, err := e.resolveHelpTarget(*path, *language, *serverName)
+	if err != nil {
+		return e.fail(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	ctx, cancel := context.WithTimeout(e.base(), *timeout)
 	defer cancel()
-
-	srv, err := client.StartCommand(argv, stderr)
+	s, err := startSession(ctx, e, match, client.GateOptions{Timeout: *timeout})
 	if err != nil {
-		if errors.Is(err, exec.ErrNotFound) {
-			_ = render.Fail(stdout, "no_server",
-				fmt.Sprintf("server command %q not found on PATH", argv[0]))
-			return ExitNoServer
-		}
-		_ = render.Fail(stdout, "spawn_failed", err.Error())
-		return ExitCrash
+		return e.fail(err)
 	}
-	// Always reap the subprocess, even on the error paths.
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = ""
-	}
-
-	initResult, err := srv.Initialize(ctx, cwd)
-	if err != nil {
-		return failRPC(stdout, "initialize", err)
-	}
+	defer s.close()
 
 	var result json.RawMessage
 	if method == "initialize" {
 		// Already sent during the handshake; a second initialize is a
 		// protocol violation, so return the handshake's result.
-		result = initResult
+		result = s.caps.Raw()
 	} else {
-		result, err = srv.Call(ctx, method, paramsRaw)
+		result, err = s.rawCall(ctx, method, paramsRaw)
 		if err != nil {
-			return failRPC(stdout, method, err)
+			return failRPC(e, method, err)
 		}
 	}
 
-	if err := render.OK(stdout, result); err != nil {
-		fmt.Fprintf(stderr, "lightspeed: writing output: %v\n", err)
+	if err := render.OK(e.stdout, result); err != nil {
+		fmt.Fprintf(e.stderr, "lightspeed: writing output: %v\n", err)
 		return ExitCrash
 	}
 	return ExitOK
 }
 
 // failRPC maps a failed request to the envelope + exit-code taxonomy
-// of PLAN §4.
-func failRPC(stdout io.Writer, method string, err error) int {
-	var rpcErr *client.RPCError
-	switch {
-	case errors.As(err, &rpcErr):
-		// The server answered; that's a result, not a crash.
-		_ = render.Fail(stdout, "server_error",
-			fmt.Sprintf("%s: server returned error %d: %s", method, rpcErr.Code, rpcErr.Message))
-		return ExitProblems
-	case errors.Is(err, context.DeadlineExceeded):
-		_ = render.Fail(stdout, "timeout", fmt.Sprintf("%s: timed out waiting for server", method))
-		return ExitCrash
-	default:
-		_ = render.Fail(stdout, "server_crash", fmt.Sprintf("%s: %v", method, err))
+// of PLAN §4. The wording is raw's own — it is not gated and not
+// capability-checked, so the vocabulary of the other commands' errors
+// would promise more than it delivers.
+func failRPC(e *env, method string, err error) int {
+	var remote *daemon.Error
+	if errors.As(err, &remote) {
+		switch {
+		case remote.RPC != nil:
+			// The server answered; that's a result, not a crash.
+			_ = render.Fail(e.stdout, "server_error",
+				fmt.Sprintf("%s: server returned error %d: %s", method, remote.RPC.Code, remote.RPC.Message))
+			return ExitProblems
+		case remote.Code == daemon.CodeTimeout:
+			_ = render.Fail(e.stdout, "timeout", fmt.Sprintf("%s: timed out waiting for server", method))
+			return ExitCrash
+		}
+		return e.fail(remoteFailure{remote})
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		_ = render.Fail(e.stdout, "timeout", fmt.Sprintf("%s: timed out waiting for server", method))
 		return ExitCrash
 	}
+	_ = render.Fail(e.stdout, "server_crash", fmt.Sprintf("%s: %v", method, err))
+	return ExitCrash
 }

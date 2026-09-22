@@ -14,6 +14,11 @@ import (
 // implementation, a symbol.
 type Result struct {
 	Span
+	// ID is the stable symbol id (`path::Container.Name#kind`) of the symbol
+	// the result describes, when it describes one and the id could be
+	// computed. It is what `source`, `context` and every location command's
+	// --id take back.
+	ID string `json:"id,omitempty"`
 	// Kind is an optional classification, e.g. a symbol kind
 	// ("function", "struct") or "declaration" vs "use".
 	Kind string `json:"kind,omitempty"`
@@ -100,18 +105,52 @@ func Results(w io.Writer, f Format, rs ResultSet, opts Options) error {
 	}
 }
 
+// compactPoint is Point without the byte offset: the coordinate a caller
+// actually pastes back into lightspeed (--verbose-locations restores the
+// offset via Point itself; docs/DECISIONS.md D45).
+type compactPoint struct {
+	Line   int `json:"line"`
+	Column int `json:"column"`
+}
+
+func (p Point) compact() compactPoint { return compactPoint{Line: p.Line, Column: p.Column} }
+
 // resultView is a Result as rendered: the result itself plus whatever
-// Options.Context asked for.
+// Options.Context asked for. It is the verbose shape
+// (--verbose-locations): uri, the LSP range and byte offsets alongside
+// path and the byte start/end.
 type resultView struct {
 	Result
 	Before []ContextLine `json:"before,omitempty"`
 	After  []ContextLine `json:"after,omitempty"`
 }
 
+// compactResultView is the default shape of a location result: path plus
+// 1-based start/end line/column plus text, without uri, the LSP range or
+// byte offsets (docs/DECISIONS.md D45). Every field --verbose-locations
+// would add is still computed; only its JSON encoding is smaller.
+type compactResultView struct {
+	Path   string        `json:"path"`
+	Start  compactPoint  `json:"start"`
+	End    compactPoint  `json:"end"`
+	Text   string        `json:"text"`
+	ID     string        `json:"id,omitempty"`
+	Kind   string        `json:"kind,omitempty"`
+	Detail string        `json:"detail,omitempty"`
+	Label  string        `json:"label,omitempty"`
+	Before []ContextLine `json:"before,omitempty"`
+	After  []ContextLine `json:"after,omitempty"`
+}
+
 // resultsData is the payload of a results envelope.
 type resultsData struct {
-	Kind    string       `json:"kind"`
-	Results []resultView `json:"results"`
+	// Root is the directory the file paths are relative to, present when they
+	// are (the workspace root; --absolute leaves it out and the paths absolute).
+	Root string `json:"root,omitempty"`
+	Kind string `json:"kind"`
+	// Results is []compactResultView by default, []resultView with
+	// --verbose-locations; both encode as a JSON array of objects.
+	Results any `json:"results"`
 	// Count is how many results this output contains, Total how many
 	// existed. They differ exactly when Truncated is set.
 	Count     int  `json:"count"`
@@ -126,24 +165,42 @@ func resultsJSON(w io.Writer, rs ResultSet, opts Options) error {
 	kept, cut := truncate(rs.Results, opts.Limit)
 	total := rs.total()
 
-	views := make([]resultView, 0, len(kept))
-	for _, r := range kept {
-		r.Path = opts.displayPath(r.Path)
-		before, after := r.context(opts.Context)
-		views = append(views, resultView{Result: r, Before: before, After: after})
+	count := len(kept)
+	var results any
+	if opts.VerboseLocations {
+		views := make([]resultView, 0, count)
+		for _, r := range kept {
+			r.Path = opts.displayPath(r.Path)
+			before, after := r.context(opts.Context)
+			views = append(views, resultView{Result: r, Before: before, After: after})
+		}
+		results = views
+	} else {
+		views := make([]compactResultView, 0, count)
+		for _, r := range kept {
+			r.Path = opts.displayPath(r.Path)
+			before, after := r.context(opts.Context)
+			views = append(views, compactResultView{
+				Path: r.Path, Start: r.Start.compact(), End: r.End.compact(), Text: r.Text,
+				ID: r.ID, Kind: r.Kind, Detail: r.Detail, Label: r.Label,
+				Before: before, After: after,
+			})
+		}
+		results = views
 	}
 
 	data := resultsData{
+		Root:      opts.Root,
 		Kind:      rs.kind(),
-		Results:   views,
-		Count:     len(views),
+		Results:   results,
+		Count:     count,
 		Total:     total,
 		Truncated: cut || rs.Truncated,
 	}
 	warnings := slices.Clone(opts.Warnings)
 	if cut {
 		data.Limit = opts.Limit
-		warnings = append(warnings, truncationWarning(rs.kind(), len(views), total, opts.Limit))
+		warnings = append(warnings, truncationWarning(rs.kind(), count, total, opts.Limit))
 	}
 	return WriteEnvelope(w, Envelope{
 		Version:  EnvelopeVersion,

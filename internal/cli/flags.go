@@ -19,6 +19,9 @@ import (
 // the gate's clock the one that runs out.
 const gateSlack = 2 * time.Second
 
+// offlineUsage is the help text of --offline wherever it is registered.
+const offlineUsage = "refuse anything that could download (`install --run`); the kill switch of PLAN §6 (env: LIGHTSPEED_OFFLINE=1)"
+
 // commonFlags are the flags every query command shares: the output
 // contract of PLAN §4 plus the knobs that decide when an answer may be
 // believed.
@@ -30,6 +33,19 @@ type commonFlags struct {
 	timeout time.Duration
 	settle  time.Duration
 	server  string
+	// noDaemon is --no-daemon; see env.noDaemon.
+	noDaemon bool
+	// offline is --offline; see env.offline.
+	offline bool
+	// absolute is --absolute: report absolute file paths instead of paths
+	// relative to the workspace root (docs/DECISIONS.md D30).
+	absolute bool
+	// verboseLocations is --verbose-locations: restore uri, the LSP range
+	// and byte offsets on every location result (docs/DECISIONS.md D45).
+	verboseLocations bool
+	// report is --report: restore the full index revalidation report
+	// instead of a one-line summary and a stale flag (docs/DECISIONS.md D46).
+	report bool
 }
 
 // register adds the common flags to fs.
@@ -41,17 +57,30 @@ func (f *commonFlags) register(fs *flag.FlagSet) {
 	fs.DurationVar(&f.timeout, "timeout", client.DefaultTimeout, "how long to wait for the workspace to become ready")
 	fs.DurationVar(&f.settle, "settle", client.DefaultSettle, "how long a result must be unchanged before it is believed")
 	fs.StringVar(&f.server, "server", "", "name of the server to use when several claim the file")
+	fs.BoolVar(&f.noDaemon, "no-daemon", false, "run the language server inside this process instead of the workspace's shared daemon (env: "+noDaemonEnv+"=1)")
+	fs.BoolVar(&f.offline, "offline", false, offlineUsage)
+	fs.BoolVar(&f.absolute, "absolute", false, "print absolute file paths instead of paths relative to the workspace root")
+	fs.BoolVar(&f.verboseLocations, "verbose-locations", false, "restore uri, the LSP range and byte offsets on every location result (default: path plus 1-based start/end line/column plus text)")
+	fs.BoolVar(&f.report, "report", false, "restore the full index revalidation report instead of a one-line summary and a stale flag")
 }
 
 // renderOptions maps the flags onto the renderer's options, folding in
-// the readiness warnings the gate attached to the answer.
-func (f *commonFlags) renderOptions(warnings []string) render.Options {
-	return render.Options{
-		Context:  f.context,
-		Limit:    f.limit,
-		Indent:   f.indent,
-		Warnings: warnings,
+// the readiness warnings the gate attached to the answer. root is the
+// workspace root the answer belongs to: file paths under it are reported
+// relative to it, unless --absolute says otherwise. A file outside it keeps
+// its absolute path.
+func (f *commonFlags) renderOptions(root string, warnings []string) render.Options {
+	opts := render.Options{
+		Context:          f.context,
+		Limit:            f.limit,
+		Indent:           f.indent,
+		Warnings:         warnings,
+		VerboseLocations: f.verboseLocations,
 	}
+	if !f.absolute {
+		opts.Root = root
+	}
+	return opts
 }
 
 // gateOptions maps the flags onto the readiness gate's options.
@@ -101,6 +130,9 @@ func parseFlags(e *env, c *command, args []string, want int, extra func(*flag.Fl
 // number of positional arguments: `format` takes one path or twenty.
 // A max of -1 means "no upper bound".
 func parseFlagsRange(e *env, c *command, args []string, min, max int, extra func(*flag.FlagSet)) (*commonFlags, []string, error) {
+	if e.onArity != nil {
+		e.onArity(min, max)
+	}
 	fs := flag.NewFlagSet(c.Name, flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	fs.Usage = func() {
@@ -124,6 +156,12 @@ func parseFlagsRange(e *env, c *command, args []string, min, max int, extra func
 
 	if err := common.validate(); err != nil {
 		return nil, nil, err
+	}
+	if common.noDaemon {
+		e.noDaemon = true
+	}
+	if common.offline {
+		e.offline = true
 	}
 	if len(positional) < min || (max >= 0 && len(positional) > max) {
 		fs.Usage()

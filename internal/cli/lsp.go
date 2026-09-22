@@ -7,6 +7,7 @@ import (
 
 	"github.com/tanevanwifferen/Lightspeed/internal/gopls/protocol"
 	"github.com/tanevanwifferen/Lightspeed/internal/render"
+	"github.com/tanevanwifferen/Lightspeed/internal/symbols"
 )
 
 // The LSP methods behind PLAN §4's read-only command surface. They are
@@ -169,176 +170,15 @@ func decodeMarkup(raw json.RawMessage) (string, error) {
 	}
 }
 
-// documentSymbol is the hierarchical DocumentSymbol shape. Range
-// covers the whole declaration and SelectionRange just the name; the
-// name is what a `file:line:col` result should point at.
-type documentSymbol struct {
-	Name           string           `json:"name"`
-	Detail         string           `json:"detail"`
-	Kind           int              `json:"kind"`
-	Deprecated     bool             `json:"deprecated"`
-	Range          protocol.Range   `json:"range"`
-	SelectionRange protocol.Range   `json:"selectionRange"`
-	Children       []documentSymbol `json:"children"`
-}
+// The symbol model — decoding documentSymbol in both of its shapes, kinds — is
+// internal/symbols; these are its names inside this package.
+type symbol = symbols.Symbol
 
-// symbolInformation is the flat SymbolInformation / WorkspaceSymbol
-// shape. WorkspaceSymbol is allowed to send a location carrying only a
-// uri, so Location.Range may be the zero range and mean "unknown".
-type symbolInformation struct {
-	Name          string            `json:"name"`
-	Kind          int               `json:"kind"`
-	ContainerName string            `json:"containerName"`
-	Location      protocol.Location `json:"location"`
-}
-
-// symbol is one entry of a symbols or workspace_symbol answer,
-// flattened out of whichever shape the server used.
-type symbol struct {
-	Name string
-	// Qualified is Name prefixed by its enclosing symbols, e.g.
-	// "Server.Handle". It is what an agent greps for.
-	Qualified string
-	Kind      string
-	Detail    string
-	URI       protocol.DocumentURI
-	// Range is where to point. It is the zero range when a
-	// WorkspaceSymbol gave a uri and nothing else.
-	Range protocol.Range
-	// HasRange distinguishes "the symbol is at 0:0" from "the server
-	// did not say where it is".
-	HasRange bool
-}
-
-// decodeDocumentSymbols decodes textDocument/documentSymbol, which may
-// answer with either the hierarchical or the flat shape, and returns
-// the symbols in document order with hierarchy flattened into
-// qualified names.
-func decodeDocumentSymbols(raw json.RawMessage, uri protocol.DocumentURI) ([]symbol, error) {
-	if isJSONNull(raw) {
-		return nil, nil
-	}
-	var elems []json.RawMessage
-	if err := json.Unmarshal(raw, &elems); err != nil {
-		return nil, protocolError("documentSymbol", err)
-	}
-	if len(elems) == 0 {
-		return nil, nil
-	}
-	// The two shapes are told apart by the field that only one of
-	// them has: SymbolInformation carries "location", DocumentSymbol
-	// carries "selectionRange".
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal(elems[0], &probe); err != nil {
-		return nil, protocolError("documentSymbol", err)
-	}
-	if _, flat := probe["location"]; flat {
-		return decodeSymbolInformation(elems)
-	}
-
-	var tree []documentSymbol
-	if err := json.Unmarshal(raw, &tree); err != nil {
-		return nil, protocolError("documentSymbol", err)
-	}
-	var out []symbol
-	var walk func(prefix string, syms []documentSymbol)
-	walk = func(prefix string, syms []documentSymbol) {
-		for _, s := range syms {
-			qualified := s.Name
-			if prefix != "" {
-				qualified = prefix + "." + s.Name
-			}
-			out = append(out, symbol{
-				Name:      s.Name,
-				Qualified: qualified,
-				Kind:      symbolKindName(s.Kind),
-				Detail:    s.Detail,
-				URI:       uri,
-				Range:     s.SelectionRange,
-				HasRange:  true,
-			})
-			walk(qualified, s.Children)
-		}
-	}
-	walk("", tree)
-	return out, nil
-}
-
-// decodeWorkspaceSymbols decodes workspace/symbol.
-func decodeWorkspaceSymbols(raw json.RawMessage) ([]symbol, error) {
-	if isJSONNull(raw) {
-		return nil, nil
-	}
-	var elems []json.RawMessage
-	if err := json.Unmarshal(raw, &elems); err != nil {
-		return nil, protocolError("workspace/symbol", err)
-	}
-	return decodeSymbolInformation(elems)
-}
-
-func decodeSymbolInformation(elems []json.RawMessage) ([]symbol, error) {
-	out := make([]symbol, 0, len(elems))
-	for _, elem := range elems {
-		var info symbolInformation
-		if err := json.Unmarshal(elem, &info); err != nil {
-			return nil, protocolError("symbol", err)
-		}
-		if info.Location.URI == "" {
-			return nil, protocolError("symbol", fmt.Errorf("symbol %q has no location", info.Name))
-		}
-		qualified := info.Name
-		if info.ContainerName != "" {
-			qualified = info.ContainerName + "." + info.Name
-		}
-		out = append(out, symbol{
-			Name:      info.Name,
-			Qualified: qualified,
-			Kind:      symbolKindName(info.Kind),
-			Detail:    info.ContainerName,
-			URI:       info.Location.URI,
-			Range:     info.Location.Range,
-			HasRange:  hasRange(elem),
-		})
-	}
-	return out, nil
-}
-
-// hasRange reports whether a SymbolInformation-shaped element actually
-// carried a range. A WorkspaceSymbol may send `{"uri":…}` alone, and
-// reporting that as line 1 column 1 without saying so would be a
-// location the user cannot trust.
-func hasRange(elem json.RawMessage) bool {
-	var probe struct {
-		Location map[string]json.RawMessage `json:"location"`
-	}
-	if err := json.Unmarshal(elem, &probe); err != nil {
-		return false
-	}
-	_, ok := probe.Location["range"]
-	return ok
-}
-
-// symbolKinds maps LSP SymbolKind numbers to names. Index 0 is unused:
-// SymbolKind is 1-based.
-var symbolKinds = [...]string{
-	"", "file", "module", "namespace", "package", "class", "method",
-	"property", "field", "constructor", "enum", "interface", "function",
-	"variable", "constant", "string", "number", "boolean", "array",
-	"object", "key", "null", "enum-member", "struct", "event",
-	"operator", "type-parameter",
-}
-
-// symbolKindName names a SymbolKind, falling back to the number for a
-// value from a newer protocol revision than this build knows.
-func symbolKindName(kind int) string {
-	if kind > 0 && kind < len(symbolKinds) {
-		return symbolKinds[kind]
-	}
-	if kind == 0 {
-		return ""
-	}
-	return fmt.Sprintf("kind-%d", kind)
-}
+var (
+	decodeDocumentSymbols  = symbols.DecodeDocumentSymbols
+	decodeWorkspaceSymbols = symbols.DecodeWorkspaceSymbols
+	symbolKindName         = symbols.KindName
+)
 
 // isJSONNull reports whether a raw result is absent or the JSON null,
 // the two ways a server says "nothing".

@@ -20,6 +20,17 @@
         { "not": { "required": ["server"] } },
         { "not": { "required": ["install"] } }
       ]
+    },
+    {
+      "title": "Tool settings only, no server definition",
+      "required": ["dead_code"],
+      "allOf": [
+        { "not": { "required": ["name"] } },
+        { "not": { "required": ["servers"] } },
+        { "not": { "required": ["activation"] } },
+        { "not": { "required": ["server"] } },
+        { "not": { "required": ["install"] } }
+      ]
     }
   ],
   "properties": {
@@ -40,7 +51,24 @@
     },
     "activation": { "$ref": "#/$defs/activation" },
     "server": { "$ref": "#/$defs/server" },
-    "install": { "$ref": "#/$defs/install" }
+    "install": { "$ref": "#/$defs/install" },
+    "dead_code": {
+      "type": "object",
+      "description": "Settings of `lightspeed dead_code`, not of a server: what it must never report. Read from the workspace's .lightspeed.toml only. Implemented by internal/serverdef/deadcode.go.",
+      "properties": {
+        "ignore_names": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Symbol names never reported: a bare name (Handle), a qualified name (Server.Handle) or a pattern with * (Test*)."
+        },
+        "ignore_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Workspace-relative globs whose symbols are never reported (generated/**, **/*.pb.go)."
+        }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false,
   "$defs": {

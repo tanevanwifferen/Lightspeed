@@ -211,6 +211,12 @@ func (s *Session) Call(ctx context.Context, method string, params any) (json.Raw
 // never advertised the method, and a *NotReadyError (exit code 5)
 // rather than an answer whose authority it could not establish.
 func (s *Session) Query(ctx context.Context, method string, params any) (QueryResult, error) {
+	return s.QueryWith(ctx, method, params, GateOptions{})
+}
+
+// QueryWith is Query under this one request's own gate options: the
+// non-zero fields of gate replace the session's (see [Gate.With]).
+func (s *Session) QueryWith(ctx context.Context, method string, params any, gate GateOptions) (QueryResult, error) {
 	if err := s.caps.Check(method); err != nil {
 		return QueryResult{}, err
 	}
@@ -220,7 +226,7 @@ func (s *Session) Query(ctx context.Context, method string, params any) (QueryRe
 	if err != nil {
 		return QueryResult{}, err
 	}
-	return s.gate.Query(ctx, method, func(ctx context.Context) (json.RawMessage, error) {
+	return s.gate.With(gate).Query(ctx, method, func(ctx context.Context) (json.RawMessage, error) {
 		return s.conn.Call(ctx, method, raw)
 	})
 }
@@ -228,6 +234,11 @@ func (s *Session) Query(ctx context.Context, method string, params any) (QueryRe
 // AwaitReady blocks until the server's initial progress set has
 // drained, or reports a *NotReadyError if it does not in time.
 func (s *Session) AwaitReady(ctx context.Context) error { return s.gate.AwaitReady(ctx) }
+
+// AwaitReadyWith is AwaitReady under this one call's own gate options.
+func (s *Session) AwaitReadyWith(ctx context.Context, gate GateOptions) error {
+	return s.gate.With(gate).AwaitReady(ctx)
+}
 
 // handleNotification feeds progress to the tracker and passes every
 // notification on to the caller's hook.

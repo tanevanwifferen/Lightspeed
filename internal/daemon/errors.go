@@ -41,6 +41,7 @@ const (
 	CodeServerError        = "server_error"
 	CodeInternal           = "internal"
 	CodeDaemonClosed       = "daemon_closed"
+	CodeDaemonStale        = "daemon_stale"
 )
 
 // An Error is a daemon-reported failure that survives the socket with
@@ -64,6 +65,18 @@ type Error struct {
 	Server string `json:"server,omitempty"`
 	// Root, when known, is the workspace root it was serving.
 	Root string `json:"root,omitempty"`
+	// RPC, when the failure was the language server itself answering
+	// with a JSON-RPC error, is that error. The CLI words such a
+	// failure as "<method>: <server> returned error <code>: <message>",
+	// and it can only do that if the code and message survive the
+	// socket instead of being flattened into Message.
+	RPC *RPCInfo `json:"rpc,omitempty"`
+	// Data is structured context for the failure, already encoded, that
+	// the CLI copies into the envelope's error.data: for a server that
+	// died during startup, its exit status and the tail of its stderr.
+	// It is raw JSON in both modes so that the envelope is the same bytes
+	// in-process and across the socket.
+	Data json.RawMessage `json:"data,omitempty"`
 
 	// wrapped is the error this was built from, if any. It keeps
 	// errors.Is working in the in-process mode — a caller may still
@@ -73,7 +86,23 @@ type Error struct {
 	wrapped error
 }
 
+// RPCInfo is a language server's JSON-RPC error, as carried by an
+// [Error].
+type RPCInfo struct {
+	Code    int64  `json:"code"`
+	Message string `json:"message"`
+}
+
 func (e *Error) Error() string { return e.Message }
+
+// ErrorDetails is the structured payload for error.data, or nil when the
+// error has none. render.FailError looks for this method.
+func (e *Error) ErrorDetails() any {
+	if len(e.Data) == 0 {
+		return nil
+	}
+	return e.Data
+}
 
 // Unwrap exposes the error this was built from.
 func (e *Error) Unwrap() error { return e.wrapped }
@@ -148,6 +177,7 @@ func asError(err error) *Error {
 	var rpcErr *client.RPCError
 	if errors.As(err, &rpcErr) {
 		fill(out, CodeServerError, exitProblems)
+		out.RPC = &RPCInfo{Code: rpcErr.Code, Message: rpcErr.Message}
 	}
 
 	fill(out, CodeInternal, exitCrash)
@@ -168,10 +198,13 @@ func fill(e *Error, code string, exit int) {
 // wireData is the payload an *Error travels in: the JSON-RPC error
 // object's `data` field, alongside the message.
 type wireData struct {
-	Code   string `json:"code,omitempty"`
-	Exit   int    `json:"exit,omitempty"`
-	Server string `json:"server,omitempty"`
-	Root   string `json:"root,omitempty"`
+	Code   string   `json:"code,omitempty"`
+	Exit   int      `json:"exit,omitempty"`
+	Server string   `json:"server,omitempty"`
+	Root   string   `json:"root,omitempty"`
+	RPC    *RPCInfo `json:"rpc,omitempty"`
+	// Data is Error.Data.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // toRPC encodes an error as the JSON-RPC error response the daemon
@@ -180,7 +213,7 @@ type wireData struct {
 // JSON-RPC codes for it would be a second taxonomy to keep in sync.
 func toRPC(err error) *client.RPCError {
 	e := asError(err)
-	data, merr := json.Marshal(wireData{Code: e.Code, Exit: e.Exit, Server: e.Server, Root: e.Root})
+	data, merr := json.Marshal(wireData{Code: e.Code, Exit: e.Exit, Server: e.Server, Root: e.Root, RPC: e.RPC, Data: e.Data})
 	if merr != nil {
 		data = nil
 	}
@@ -201,7 +234,7 @@ func fromRPC(err error) error {
 	if len(rpcErr.Data) > 0 {
 		var d wireData
 		if json.Unmarshal(rpcErr.Data, &d) == nil {
-			out.Code, out.Exit, out.Server, out.Root = d.Code, d.Exit, d.Server, d.Root
+			out.Code, out.Exit, out.Server, out.Root, out.RPC, out.Data = d.Code, d.Exit, d.Server, d.Root, d.RPC, d.Data
 		}
 	}
 	fill(out, CodeInternal, exitCrash)

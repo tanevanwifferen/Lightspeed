@@ -138,6 +138,47 @@ func TestResultsJSONWithContext(t *testing.T) {
 	golden(t, "references_context_json.json", got)
 }
 
+// TestResultsJSONCompactByDefault pins the default location shape
+// (docs/DECISIONS.md D45): path plus 1-based start/end line/column plus
+// text, with uri, the LSP range and byte offsets left out.
+func TestResultsJSONCompactByDefault(t *testing.T) {
+	rs := referencesFixture(t)
+	got := mustRender(t, func(w *bytes.Buffer) error {
+		return Results(w, FormatJSON, rs, Options{Root: fixtureRoot, Indent: true})
+	})
+	for _, absent := range []string{`"uri"`, `"range"`, `"offset"`} {
+		if bytes.Contains(got, []byte(absent)) {
+			t.Errorf("compact output contains %s, want it left out by default:\n%s", absent, got)
+		}
+	}
+}
+
+// TestResultsJSONVerboseLocations restores uri, the LSP range and byte
+// offsets with Options.VerboseLocations (--verbose-locations,
+// docs/DECISIONS.md D45); the golden is the pre-D45 shape.
+func TestResultsJSONVerboseLocations(t *testing.T) {
+	rs := referencesFixture(t)
+	got := mustRender(t, func(w *bytes.Buffer) error {
+		return Results(w, FormatJSON, rs, Options{Root: fixtureRoot, Indent: true, VerboseLocations: true})
+	})
+	golden(t, "references_verbose_json.json", got)
+	for _, present := range []string{`"uri"`, `"range"`, `"offset"`} {
+		if !bytes.Contains(got, []byte(present)) {
+			t.Errorf("verbose output missing %s:\n%s", present, got)
+		}
+	}
+
+	ctxGot := mustRender(t, func(w *bytes.Buffer) error {
+		return Results(w, FormatJSON, rs, Options{Root: fixtureRoot, Context: 1, Indent: true, VerboseLocations: true})
+	})
+	golden(t, "references_context_verbose_json.json", ctxGot)
+
+	truncGot := mustRender(t, func(w *bytes.Buffer) error {
+		return Results(w, FormatJSON, rs, Options{Root: fixtureRoot, Limit: 2, Indent: true, VerboseLocations: true})
+	})
+	golden(t, "references_truncated_verbose_json.json", truncGot)
+}
+
 // TestResultsTruncation is the token-discipline requirement of PLAN §4:
 // --limit N must announce itself, in every format.
 func TestResultsTruncation(t *testing.T) {

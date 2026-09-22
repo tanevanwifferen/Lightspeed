@@ -26,7 +26,17 @@ func socketDir(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	// A daemon the test spawned is a process, and is still writing here
+	// after its socket has gone (see WaitChildren); the directory goes only
+	// when it has.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := WaitChildren(ctx); err != nil {
+			t.Errorf("a daemon outlived its test: %v", err)
+		}
+		_ = os.RemoveAll(dir)
+	})
 	return dir
 }
 

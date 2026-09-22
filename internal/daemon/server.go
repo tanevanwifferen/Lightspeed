@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/client"
@@ -54,6 +55,18 @@ const (
 // a successful exit, not a failure: the CLI should exit 0 on it.
 var ErrIdleTimeout = errors.New("daemon: exiting after idle timeout")
 
+// ErrExecutableReplaced is returned by [Server.Serve] when the daemon exits
+// because the executable it was started from has been rebuilt, reinstalled or
+// deleted and no client is connected. Like [ErrIdleTimeout] it is a
+// successful exit.
+var ErrExecutableReplaced = errors.New("daemon: exiting, its executable was replaced or removed")
+
+// DefaultExecutableCheck is how often a daemon looks at its own executable.
+// The check is one stat; the interval is what bounds how long a daemon that
+// nothing uses lingers after its binary is gone, instead of the whole
+// [DefaultListenTimeout].
+const DefaultExecutableCheck = 10 * time.Second
+
 // ErrAlreadyRunning is returned by [Server.Listen] when a live daemon
 // is already listening on the socket. Losing this race is also not a
 // failure — the other daemon can serve the clients.
@@ -77,6 +90,17 @@ type ServerOptions struct {
 	// [DefaultDrainTimeout].
 	DrainTimeout time.Duration
 
+	// ExecutableCurrent reports whether the executable the daemon started
+	// from is still the one on disk. Nil means [Build.Current] of
+	// [SelfBuild]. When it turns false the daemon exits as soon as no
+	// client is connected (D29); a client that is connected is never cut
+	// off for it.
+	ExecutableCurrent func() bool
+
+	// ExecutableCheck is how often ExecutableCurrent is asked; zero means
+	// [DefaultExecutableCheck], negative never asks.
+	ExecutableCheck time.Duration
+
 	// Logf logs daemon events. Nil discards them.
 	Logf func(format string, args ...any)
 }
@@ -87,6 +111,12 @@ func (o ServerOptions) withDefaults() ServerOptions {
 	}
 	if o.DrainTimeout <= 0 {
 		o.DrainTimeout = DefaultDrainTimeout
+	}
+	if o.ExecutableCurrent == nil {
+		o.ExecutableCurrent = SelfBuild().Current
+	}
+	if o.ExecutableCheck == 0 {
+		o.ExecutableCheck = DefaultExecutableCheck
 	}
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
@@ -116,6 +146,7 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 	inflight int
 	stopping bool
+	nextConn atomic.Uint64
 
 	stop       chan struct{} // closed to stop accepting
 	done       chan struct{} // closed when Serve has returned
@@ -277,6 +308,23 @@ func (s *Server) serve(ctx context.Context) error {
 	timer := time.NewTimer(idle)
 	defer timer.Stop()
 
+	// A daemon whose binary has gone is an older program than the one a
+	// client would start, so it should not outlive its last client by the
+	// whole idle timeout.
+	var exeTick <-chan time.Time
+	if s.opts.ExecutableCheck > 0 {
+		t := time.NewTicker(s.opts.ExecutableCheck)
+		defer t.Stop()
+		exeTick = t.C
+	}
+	replaced := func() bool {
+		if s.clientCount() > 0 || s.opts.ExecutableCurrent() {
+			return false
+		}
+		s.opts.Logf("executable replaced or removed and no client is connected; exiting")
+		return true
+	}
+
 	for {
 		select {
 		case nc, ok := <-newConns:
@@ -302,7 +350,15 @@ func (s *Server) serve(ctx context.Context) error {
 
 		case <-closed:
 			if s.clientCount() == 0 {
+				if replaced() {
+					return ErrExecutableReplaced
+				}
 				timer.Reset(idle)
+			}
+
+		case <-exeTick:
+			if replaced() {
+				return ErrExecutableReplaced
 			}
 
 		case <-timer.C:
@@ -333,11 +389,15 @@ func (s *Server) serve(ctx context.Context) error {
 // until there is a batch mode to want it.
 func (s *Server) serveConn(ctx context.Context, nc net.Conn) {
 	conn := client.NewConn(nc, nc)
+	id := s.nextConn.Add(1)
+	ctx = context.WithValue(ctx, connKey{}, id)
 	conn.SetRequestHandler(func(_ context.Context, method string, params json.RawMessage) (any, error) {
 		return s.handle(ctx, method, params)
 	})
 	<-conn.Done()
 	_ = nc.Close()
+	// A client that was killed mid-command never sent its closes.
+	s.opts.Service.dropConn(id)
 }
 
 // handle answers one protocol request, counting it as in flight so a

@@ -196,6 +196,9 @@ type diagnosticView struct {
 }
 
 type diagnosticsData struct {
+	// Root is the directory the file paths are relative to, present when they
+	// are (the workspace root; --absolute leaves it out and the paths absolute).
+	Root        string           `json:"root,omitempty"`
 	Diagnostics []diagnosticView `json:"diagnostics"`
 	Count       int              `json:"count"`
 	Total       int              `json:"total"`
@@ -223,6 +226,7 @@ func diagnosticsJSON(w io.Writer, ds DiagnosticSet, opts Options) error {
 	}
 
 	data := diagnosticsData{
+		Root:        opts.Root,
 		Diagnostics: views,
 		Count:       len(views),
 		Total:       total,

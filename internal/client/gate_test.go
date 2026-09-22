@@ -645,3 +645,26 @@ func TestGateNeverReturnsUnverifiedEmpty(t *testing.T) {
 		})
 	}
 }
+
+// TestGateWithLaysTheCallsOptionsOverTheSessions: a pooled session
+// outlives the command that started it, so --timeout and --settle have
+// to be per call. The derived gate must still be *this session's* gate:
+// same progress, same start, or its no-progress grace would restart with
+// every query and a warm server would be treated as a cold one.
+func TestGateWithLaysTheCallsOptionsOverTheSessions(t *testing.T) {
+	base := NewGate(nil, GateOptions{Timeout: time.Minute, Settle: time.Second})
+
+	derived := base.With(GateOptions{Timeout: 5 * time.Second})
+	if got := derived.Options(); got.Timeout != 5*time.Second || got.Settle != time.Second {
+		t.Errorf("options = %+v, want the call's timeout over the session's settle", got)
+	}
+	if got := base.Options(); got.Timeout != time.Minute {
+		t.Errorf("With changed the session's own gate: %+v", got)
+	}
+	if same := base.With(GateOptions{}); same.Options().Timeout != time.Minute || same.Options().Settle != time.Second {
+		t.Errorf("an empty override changed the options: %+v", same.Options())
+	}
+	if derived.Progress() != base.Progress() || !derived.created.Equal(base.created) {
+		t.Error("the derived gate is not over the session's progress and start")
+	}
+}

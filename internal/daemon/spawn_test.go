@@ -38,6 +38,10 @@ func TestMain(m *testing.M) {
 	if os.Getenv(envChild) == "1" {
 		os.Exit(runChildDaemon())
 	}
+	// The race runtime sleeps a second before a process exits; the daemons
+	// and servers this binary starts are waited for, so it is one second per
+	// test under -race. It read GORACE at start, so this reaches children only.
+	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	os.Exit(m.Run())
 }
 

@@ -39,17 +39,22 @@ const symbolCandidateLimit = 10
 type symbolFlags struct {
 	// query is --symbol, e.g. "pkg.Type.Method".
 	query string
+	// id is --id, a symbol id (docs/DECISIONS.md D21).
+	id string
 	// path is the directory whose workspace is searched. A symbol
 	// path names no file, so unlike every other location there is
-	// nothing in the argument itself to route on.
+	// nothing in the argument itself to route on. For --id it is the
+	// workspace the id's path is relative to.
 	path string
 }
 
 func (f *symbolFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.query, "symbol", "",
 		"resolve a dotted symbol path (pkg.Type.Method) to a location, instead of naming one")
+	fs.StringVar(&f.id, "id", "",
+		"name the position by a symbol id (path::Container.Name#kind) from outline, symbols or workspace_symbol, instead of naming a location")
 	fs.StringVar(&f.path, "path", ".",
-		"directory whose workspace --symbol searches")
+		"directory whose workspace --symbol searches, and that --id's path is relative to")
 }
 
 // parseLocationFlags parses a command that names a position: either as
@@ -73,17 +78,25 @@ func parseLocationFlags(e *env, c *command, args []string, extra int, register f
 		return nil, nil, "", nil, err
 	}
 
-	if sf.query == "" {
+	if sf.query != "" && sf.id != "" {
+		return nil, nil, "", nil, render.Errorf(render.CodeUsage,
+			"%s: --symbol %q and --id %q both name a position; give one or the other", c.Name, sf.query, sf.id)
+	}
+	if sf.query == "" && sf.id == "" {
 		if len(positional) != extra+1 {
 			return nil, nil, "", nil, render.Errorf(render.CodeUsage,
-				"%s: expected a location (%s), or --symbol to name the position instead", c.Name, c.Args)
+				"%s: expected a location (%s), or --symbol or --id to name the position instead", c.Name, c.Args)
 		}
 		return common, sf, positional[0], positional[1:], nil
 	}
 	if len(positional) == extra+1 {
+		flagName, value := "--symbol", sf.query
+		if sf.id != "" {
+			flagName, value = "--id", sf.id
+		}
 		return nil, nil, "", nil, render.Errorf(render.CodeUsage,
-			"%s: %q and --symbol %q both name a position; give one or the other",
-			c.Name, positional[0], sf.query)
+			"%s: %q and %s %q both name a position; give one or the other",
+			c.Name, positional[0], flagName, value)
 	}
 	return common, sf, "", positional, nil
 }
@@ -93,10 +106,13 @@ func parseLocationFlags(e *env, c *command, args []string, extra int, register f
 // warnings the resolution produced — including which symbol was
 // chosen, which is not a detail a caller should have to infer.
 func (e *env) location(common *commonFlags, sf *symbolFlags, loc string) (string, []string, error) {
-	if sf == nil || sf.query == "" {
-		return loc, nil, nil
+	switch {
+	case sf != nil && sf.id != "":
+		return resolveIDLocation(e, common, sf)
+	case sf != nil && sf.query != "":
+		return resolveSymbol(e, common, sf)
 	}
-	return resolveSymbol(e, common, sf)
+	return loc, nil, nil
 }
 
 // resolveSymbol turns a dotted symbol path into a location.
@@ -112,12 +128,12 @@ func resolveSymbol(e *env, common *commonFlags, sf *symbolFlags) (string, []stri
 		return "", nil, err
 	}
 
-	match, err := resolveWorkspace(sf.path, "", common.server)
+	match, err := e.resolveWorkspace(sf.path, "", common.server)
 	if err != nil {
 		return "", nil, err
 	}
 
-	connectCtx, cancelConnect := context.WithTimeout(context.Background(), common.timeout)
+	connectCtx, cancelConnect := context.WithTimeout(e.base(), common.timeout)
 	defer cancelConnect()
 	s, err := startSession(connectCtx, e, match, common.gateOptions())
 	if err != nil {
@@ -125,7 +141,7 @@ func resolveSymbol(e *env, common *commonFlags, sf *symbolFlags) (string, []stri
 	}
 	defer s.close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), common.timeout+gateSlack)
+	ctx, cancel := context.WithTimeout(e.base(), common.timeout+gateSlack)
 	defer cancel()
 	// The query is the last segment only. workspace/symbol matches
 	// names, not paths: servers differ on whether they do substring,

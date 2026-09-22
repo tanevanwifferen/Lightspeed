@@ -78,12 +78,12 @@ func helpCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	match, err := resolveHelpTarget(positional[0], *language, common.server)
+	match, err := e.resolveHelpTarget(positional[0], *language, common.server)
 	if err != nil {
 		return e.fail(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), common.timeout)
+	ctx, cancel := context.WithTimeout(e.base(), common.timeout)
 	defer cancel()
 	s, err := startSession(ctx, e, match, common.gateOptions())
 	if err != nil {
@@ -123,15 +123,15 @@ func helpCommand(e *env, c *command, args []string) int {
 
 // resolveHelpTarget resolves a file or a directory to a server, so
 // that `help` accepts either.
-func resolveHelpTarget(target, language, serverName string) (router.Match, error) {
+func (e *env) resolveHelpTarget(target, language, serverName string) (router.Match, error) {
 	abs, err := filepath.Abs(target)
 	if err != nil {
 		return router.Match{}, render.Errorf(render.CodeUsage, "resolving %s: %v", target, err)
 	}
 	if info, err := os.Stat(abs); err == nil && info.IsDir() {
-		return resolveWorkspace(abs, language, serverName)
+		return e.resolveWorkspace(abs, language, serverName)
 	}
-	return resolveTarget(abs, language, serverName)
+	return e.resolveTarget(abs, language, serverName)
 }
 
 // describeServer names the server as it introduced itself, which is

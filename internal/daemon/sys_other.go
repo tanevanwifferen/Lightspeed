@@ -24,3 +24,8 @@ func inode(path string) (uint64, error) {
 
 // daemonize has no portable equivalent.
 func daemonize(cmd *exec.Cmd) {}
+
+// processAlive cannot be answered portably. Reporting the process as gone
+// makes WaitExit return at once, which costs only the guarantee that the
+// daemon has finished shutting down, not correctness.
+func processAlive(pid int) bool { return false }

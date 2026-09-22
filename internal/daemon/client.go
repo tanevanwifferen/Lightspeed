@@ -258,9 +258,10 @@ func spawnDaemon(opts ClientOptions) error {
 			Exit:    exitCrash,
 		}
 	}
-	// The daemon outlives us; do not keep it as a child we will
-	// never wait for.
-	_ = cmd.Process.Release()
+	// The daemon outlives us, but it is still our child until we exit:
+	// collect it when it goes, or it is a zombie for as long as this
+	// process lives (see reap).
+	reap(cmd)
 	return nil
 }
 
@@ -281,6 +282,59 @@ func (c *Client) Query(ctx context.Context, req Request) (*Response, error) {
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// Session starts or finds the server for a target on the daemon.
+func (c *Client) Session(ctx context.Context, t Target) (*SessionInfo, error) {
+	var info SessionInfo
+	if err := c.call(ctx, MethodSession, t, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// Open announces documents to the daemon's server for a target.
+func (c *Client) Open(ctx context.Context, req OpenRequest) (*OpenResult, error) {
+	var res OpenResult
+	if err := c.call(ctx, MethodOpen, req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+// CloseDocuments closes documents on the daemon's server for a target.
+func (c *Client) CloseDocuments(ctx context.Context, req CloseRequest) error {
+	return c.call(ctx, MethodClose, req, nil)
+}
+
+// FilesChanged tells the daemon's server for a target that files
+// changed on disk.
+func (c *Client) FilesChanged(ctx context.Context, req ChangedRequest) error {
+	return c.call(ctx, MethodChanged, req, nil)
+}
+
+// Ready waits on the daemon for the target's server to finish its
+// initial work.
+func (c *Client) Ready(ctx context.Context, req ReadyRequest) error {
+	return c.call(ctx, MethodReady, req, nil)
+}
+
+// Diagnostics asks the daemon what the target's server has published.
+func (c *Client) Diagnostics(ctx context.Context, req DiagnosticsRequest) (*DiagnosticsState, error) {
+	var st DiagnosticsState
+	if err := c.call(ctx, MethodDiagnostics, req, &st); err != nil {
+		return nil, err
+	}
+	return &st, nil
+}
+
+// Index runs one index operation on the daemon.
+func (c *Client) Index(ctx context.Context, req IndexRequest) (*IndexResponse, error) {
+	var res IndexResponse
+	if err := c.call(ctx, MethodIndex, req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 // Status describes the daemon and its pooled servers.

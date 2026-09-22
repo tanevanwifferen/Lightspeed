@@ -2,6 +2,7 @@
   "version": 1,
   "ok": true,
   "data": {
+    "root": "/w",
     "changes": [
       {
         "kind": "modify",

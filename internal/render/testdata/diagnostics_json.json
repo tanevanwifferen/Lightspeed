@@ -2,6 +2,7 @@
   "version": 1,
   "ok": true,
   "data": {
+    "root": "/w",
     "diagnostics": [
       {
         "uri": "file:///w/internal/fixture/fixture.go",

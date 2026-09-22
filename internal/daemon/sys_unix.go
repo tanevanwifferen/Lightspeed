@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -62,4 +63,24 @@ func inode(path string) (uint64, error) {
 // start it, does not take the daemon with it. gopls does exactly this.
 func daemonize(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}
+
+// processAlive reports whether a process with this pid is still running.
+// Signal 0 checks for existence without sending anything; EPERM means it
+// exists and belongs to someone else. A zombie — exited, not yet reaped by its
+// parent — still answers signal 0, and is not running, so where /proc says so
+// it is counted as gone: a daemon whose parent is an older, non-reaping
+// process must not make `daemon stop` wait out its whole timeout.
+func processAlive(pid int) bool {
+	if err := syscall.Kill(pid, 0); err != nil && !errors.Is(err, syscall.EPERM) {
+		return false
+	}
+	if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+		// "pid (comm) S ...": the state is the field after the last ')',
+		// which is the only reliable place to look, comm being free text.
+		if i := bytes.LastIndexByte(stat, ')'); i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z' {
+			return false
+		}
+	}
+	return true
 }

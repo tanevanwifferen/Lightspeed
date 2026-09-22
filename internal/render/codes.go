@@ -29,6 +29,25 @@ const (
 	CodeUnsupportedFormat Code = "unsupported_format"
 	// CodeNoSuchFile is a path argument that does not exist.
 	CodeNoSuchFile Code = "no_such_file"
+	// CodeInvalidConfig is a server-definition file (.lightspeed.toml,
+	// servers.d/*.toml) that cannot be used. A broken config is never
+	// skipped: an override that silently does nothing is the failure
+	// PLAN §6 exists to prevent.
+	CodeInvalidConfig Code = "invalid_config"
+	// CodeConfigConflict is two definitions of one server inside a
+	// single configuration layer.
+	CodeConfigConflict Code = "config_conflict"
+	// CodeNoSuchServer is a request that names a server no
+	// configuration layer defines (`install nonesuch`).
+	CodeNoSuchServer Code = "no_such_server"
+	// CodeDaemonStale is a running daemon whose server definitions
+	// differ from the ones this command resolved, that could not be
+	// restarted because another command is using it.
+	CodeDaemonStale Code = "daemon_stale"
+	// CodeOutsideWorkspace is a path that resolves outside the workspace
+	// root a command is confined to (`file ../../etc/passwd`, an id that
+	// climbs out with `..`). Nothing was read.
+	CodeOutsideWorkspace Code = "outside_workspace"
 
 	// -- exit 3, no server: nothing is able to answer, and installing
 	// something would fix it.
@@ -38,12 +57,20 @@ const (
 	// CodeServerNotInstalled is "a server matches, but its command is
 	// not on PATH". The message must carry the exact install command.
 	CodeServerNotInstalled Code = "server_not_installed"
+	// CodeNotCovered is "nothing in lightspeed covers this language for this
+	// question": no import extractor reads it, so an empty answer would be
+	// "unknown" dressed as "none" (docs/DECISIONS.md D35).
+	CodeNotCovered Code = "not_covered"
 	// CodeUnsupportedMethod is "the server does not advertise the
 	// capability this command needs" (PLAN §5.4: never call
 	// uncapabilitied methods).
 	CodeUnsupportedMethod Code = "unsupported_method"
 	// CodeOffline is "this would need the network and --offline is set".
 	CodeOffline Code = "offline"
+	// CodeMiseUnavailable is "installation is delegated to mise and mise
+	// is not there". Nothing else is tried: PLAN §6 has no fallback that
+	// downloads.
+	CodeMiseUnavailable Code = "mise_unavailable"
 
 	// -- exit 5, not ready: the answer would be of unknown authority.
 
@@ -59,6 +86,8 @@ const (
 	CodeCancelled Code = "cancelled"
 	// CodeSpawnFailed is a server process that would not start.
 	CodeSpawnFailed Code = "spawn_failed"
+	// CodeInstallFailed is a delegated `mise use` that ran and failed.
+	CodeInstallFailed Code = "install_failed"
 	// CodeServerCrash is a server process that died or stopped
 	// answering mid-request.
 	CodeServerCrash Code = "server_crash"
@@ -90,6 +119,10 @@ const (
 	// overlapping edits, stale versions, or a path outside the
 	// workspace (PLAN §5.3). Nothing was written.
 	CodeEditConflict Code = "edit_conflict"
+	// CodeStaleID is a symbol id that no longer resolves: the file is gone,
+	// or has no such symbol any more. The error names the nearest
+	// candidates and never picks one (docs/DECISIONS.md D21).
+	CodeStaleID Code = "stale_id"
 	// CodeDirtyWorktree is a write refused because the git worktree
 	// has uncommitted changes and --allow-dirty was not passed.
 	CodeDirtyWorktree Code = "dirty_worktree"

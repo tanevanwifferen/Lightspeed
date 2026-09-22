@@ -1,13 +1,19 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tanevanwifferen/Lightspeed/internal/daemon"
 	"github.com/tanevanwifferen/Lightspeed/internal/fakeserver"
 	"github.com/tanevanwifferen/Lightspeed/internal/render"
+	"github.com/tanevanwifferen/Lightspeed/internal/serverdef"
 )
 
 // The raw end-to-end test needs a language server subprocess without
@@ -16,12 +22,33 @@ import (
 const fakeServerModeEnv = "LIGHTSPEED_TEST_FAKESERVER"
 
 func TestMain(m *testing.M) {
+	// The auto-spawned daemon is this binary re-executed as
+	// `daemon serve ...` (daemon_test.go). It has to be recognised
+	// before the fake-server mode below, because a test that set
+	// fakeServerModeEnv passes it on to the daemon it starts, and the
+	// language server the daemon starts in turn must still be the fake.
+	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+		os.Exit(Main(os.Args[1:], os.Stdout, os.Stderr))
+	}
 	if os.Getenv(fakeServerModeEnv) == "1" {
 		// runFakeServer (scenario_test.go) picks the script from the
 		// environment; with no scenario set it is the M0 fixed one.
 		os.Exit(runFakeServer())
 	}
-	os.Exit(m.Run())
+	quickRaceExit()
+	os.Exit(runTests(m))
+}
+
+// quickRaceExit makes the processes this binary starts — the fake language
+// server, the daemon — leave at once when built with -race. The race runtime
+// sleeps atexit_sleep_ms (1s by default) before a process exits, so that its
+// report can be flushed, and every command in this package waits for the server
+// it started to exit: under -race that was a second per session, and
+// `go test -race ./internal/cli` took five minutes to run a suite that takes
+// twenty seconds without. The runtime read GORACE when this process started, so
+// this reaches the children only; races are still reported.
+func quickRaceExit() {
+	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 }
 
 // useFakeServer points the raw command's server resolution at this
@@ -32,7 +59,7 @@ func useFakeServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(serverCommandEnv, exe)
+	useServerCommand(t, exe)
 	t.Setenv(fakeServerModeEnv, "1")
 }
 
@@ -134,15 +161,18 @@ func TestRawServerError(t *testing.T) {
 // TestRawNoServer checks the exit-3 path when the server binary does
 // not exist.
 func TestRawNoServer(t *testing.T) {
-	t.Setenv(serverCommandEnv, "lightspeed-no-such-server-binary")
+	useServerCommand(t, "lightspeed-no-such-server-binary")
+	t.Setenv("PATH", t.TempDir()) // nothing to find, and no mise to ask
 
 	code, stdout, _ := runMain("raw", "x/y")
 	if code != ExitNoServer {
 		t.Fatalf("exit code = %d, want %d", code, ExitNoServer)
 	}
 	env := decodeEnvelope(t, stdout)
-	if env.OK || env.Error == nil || env.Error.Code != "no_server" {
-		t.Errorf("envelope = %+v, want ok:false code no_server", env)
+	// Since M3 raw routes like every other command, so a missing
+	// binary is reported like every other command reports it.
+	if env.OK || env.Error == nil || env.Error.Code != "server_not_installed" {
+		t.Errorf("envelope = %+v, want ok:false code server_not_installed", env)
 	}
 }
 
@@ -160,4 +190,112 @@ func TestRawUsage(t *testing.T) {
 	if code, _, _ := runMain("raw", fakeserver.EchoMethod, "--params", "{not json"); code != ExitUsage {
 		t.Errorf("invalid --params: exit code = %d, want %d", code, ExitUsage)
 	}
+}
+
+// viaDaemonEnv makes the whole suite run through the auto-spawned
+// daemon instead of in process: `LIGHTSPEED_TEST_VIA_DAEMON=1 go test
+// ./internal/cli`. Every command test then doubles as a parity test
+// between the two modes, which is what PLAN §8 M3's "byte-identical"
+// claim needs and no hand-picked list of cases can give. It is opt-in
+// because it starts a daemon per test workspace.
+const viaDaemonEnv = "LIGHTSPEED_TEST_VIA_DAEMON"
+
+// suiteRuntimeDir is the runtime directory the via-daemon suite keeps
+// its sockets in; empty when the suite runs in process.
+var suiteRuntimeDir string
+
+// retireDaemons stops every daemon this test binary has started, and returns
+// only when their *processes* have exited.
+//
+// A scenario is configured through the environment of a server
+// *process*, so a warm server keeps answering from the scenario it was
+// born under. That is exactly right for a daemon and exactly wrong for
+// two subtests that share a workspace and apply different scenarios, so
+// applying a scenario retires whatever the previous one started. It
+// only ever touches suiteRuntimeDir: never a developer's own daemons.
+//
+// Waiting for the socket to disappear is not waiting for the daemon: it
+// unpublishes the socket first and then, for a while longer, shuts its
+// language servers down — which write to the spawn log and the trace in the
+// test's temporary directory. A test that returned on the socket alone had
+// t.TempDir's RemoveAll racing those writes, and lost with "directory not
+// empty". A daemon that left on its own idle timeout has no socket to find
+// at all, so the processes are waited for by asking the daemon package which
+// ones this binary started.
+func retireDaemons(t *testing.T) {
+	t.Helper()
+	if suiteRuntimeDir == "" {
+		return
+	}
+	sockets, _ := filepath.Glob(filepath.Join(suiteRuntimeDir, daemon.RuntimeDirName, "*.sock"))
+	for _, socket := range sockets {
+		c, err := daemon.Dial(context.Background(), daemon.ClientOptions{Socket: socket, NoSpawn: true})
+		if err != nil {
+			continue
+		}
+		_ = c.Stop(context.Background())
+		_ = c.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := daemon.WaitChildren(ctx); err != nil {
+		t.Errorf("a daemon outlived its test: %v", err)
+	}
+}
+
+// runTests sets the mode the suite runs in and runs it.
+//
+// By default every test runs in process, as they did before M3:
+// hermetic, and nothing left running when the test binary exits. The
+// daemon tests (daemon_test.go) opt back in explicitly.
+func runTests(m *testing.M) int {
+	// A developer's own servers.d, or an exported LIGHTSPEED_OFFLINE, must
+	// not decide what a hermetic test resolves: point the user layer at an
+	// empty directory, which each test then fills as it needs
+	// (useServerCommand, useConfigDir).
+	isolated, err := os.MkdirTemp("", "lsconf")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer os.RemoveAll(isolated)
+	os.Setenv(serverdef.EnvConfigDir, isolated)
+	os.Unsetenv(serverdef.EnvOffline)
+	// The workspace index persists under $XDG_CACHE_HOME; a test must not read
+	// or write the developer's.
+	cache, err := os.MkdirTemp("", "lscache")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer os.RemoveAll(cache)
+	os.Setenv("XDG_CACHE_HOME", cache)
+
+	if os.Getenv(viaDaemonEnv) != "1" {
+		os.Setenv(noDaemonEnv, "1")
+		return m.Run()
+	}
+	// A short directory: a unix socket path is limited to ~100 bytes,
+	// and t.TempDir() names are long.
+	dir, err := os.MkdirTemp("", "ls")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+	suiteRuntimeDir = dir
+	os.Setenv(noDaemonEnv, "0")
+	os.Setenv("XDG_RUNTIME_DIR", dir)
+	// Daemons started by tests that have finished should not linger.
+	os.Setenv(daemonTimeoutEnv, "2s")
+	code := m.Run()
+	// A daemon that is still shutting down when the binary exits would be
+	// writing into a directory the deferred RemoveAll above is deleting.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := daemon.WaitChildren(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return code
 }

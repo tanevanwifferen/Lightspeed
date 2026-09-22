@@ -197,6 +197,9 @@ type changeView struct {
 }
 
 type changesData struct {
+	// Root is the directory the file paths are relative to, present when they
+	// are (the workspace root; --absolute leaves it out and the paths absolute).
+	Root      string       `json:"root,omitempty"`
 	Changes   []changeView `json:"changes"`
 	Count     int          `json:"count"`
 	Total     int          `json:"total"`
@@ -230,6 +233,7 @@ func changesJSON(w io.Writer, cs ChangeSet, opts Options) error {
 	}
 
 	data := changesData{
+		Root:      opts.Root,
 		Changes:   views,
 		Count:     len(views),
 		Total:     cs.total(),

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,9 +8,9 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/client"
+	"github.com/tanevanwifferen/Lightspeed/internal/daemon"
 	"github.com/tanevanwifferen/Lightspeed/internal/docstore"
 	"github.com/tanevanwifferen/Lightspeed/internal/edit"
 	"github.com/tanevanwifferen/Lightspeed/internal/gopls/protocol"
@@ -140,13 +139,12 @@ func subMap(m map[string]any, key string) map[string]any {
 	return sub
 }
 
-// mutationSession is the handshake every mutation command performs.
-func mutationSession(common *commonFlags, edits *editCollector) sessionOptions {
-	return sessionOptions{
-		gate:         common.gateOptions(),
-		capabilities: mutationCapabilities(),
-		onRequest:    edits.handle,
-	}
+// mutationSession is the session every mutation command asks for. It is
+// the same as a read-only command's: the capabilities that used to
+// distinguish them are the pool's now (see sessionCapabilities), and so
+// is the handler for workspace/applyEdit.
+func mutationSession(common *commonFlags) sessionOptions {
+	return sessionOptions{gate: common.gateOptions()}
 }
 
 // docSource lets internal/edit stage an edit against the bytes this
@@ -223,9 +221,13 @@ func workspaceEdit(changes []json.RawMessage) (json.RawMessage, error) {
 
 // editOutcome is everything the mutation commands render the same way.
 type editOutcome struct {
-	tx     *edit.Transaction
-	format render.Format
-	opts   render.Options
+	// session is the server the edit came from. It is told which files
+	// were written, so that a warm server does not keep answering from
+	// what it last read of them (see daemon.Service.FilesChanged).
+	session *session
+	tx      *edit.Transaction
+	format  render.Format
+	opts    render.Options
 	// emptyIsProblem makes a transaction that changes nothing exit 1.
 	//
 	// It is per-command because "nothing changed" means opposite
@@ -254,9 +256,9 @@ func (e *env) writeMutation(mf *mutationFlags, out editOutcome) int {
 		if _, err := t.Apply(); err != nil {
 			return e.fail(err)
 		}
+		out.session.filesChanged(t.ChangeSet())
 	}
-	opts := out.opts
-	opts.Root = t.Root()
+	opts := e.rootNote(out.format, out.opts)
 	opts.Warnings = append(slices.Clone(opts.Warnings), t.Warnings()...)
 	if err := render.Changes(e.stdout, out.format, t.ChangeSet(), opts); err != nil {
 		return e.fail(err)
@@ -267,80 +269,16 @@ func (e *env) writeMutation(mf *mutationFlags, out editOutcome) int {
 	return render.ExitOK
 }
 
-// editCollector answers workspace/applyEdit.
+// collectedEdit returns the single WorkspaceEdit the server pushed.
 //
 // A code action can arrive as a command rather than an edit; running
 // it with workspace/executeCommand makes the server push its edits
-// back as applyEdit requests. Those edits must go through the same
-// transactional applier as every other edit, so the collector only
-// records them — nothing is written from the read loop, where this
-// handler runs.
-//
-// A collector that has not been armed refuses: we advertise
-// workspace/applyEdit because a command we ran may need it, not as a
-// standing invitation for a server to rewrite the tree.
-type editCollector struct {
-	// mu guards the fields below. handle runs on the connection's read
-	// loop while the command goroutine waits for executeCommand to
-	// return; the ordering happens to be safe, but relying on the
-	// client library's internal locking for that would be a
-	// dependency nobody would think to preserve.
-	mu    sync.Mutex
-	armed bool
-	edits []json.RawMessage
-	// labels are the servers' descriptions of the edits, for the
-	// error message when there is more than one.
-	labels []string
-}
-
-// arm accepts applyEdit requests until disarm is called.
-func (c *editCollector) arm() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.armed, c.edits, c.labels = true, nil, nil
-}
-
-func (c *editCollector) disarm() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.armed = false
-}
-
-// handle implements client.RequestHandler for workspace/applyEdit.
-func (c *editCollector) handle(_ context.Context, method string, params json.RawMessage) (any, error) {
-	if method != methodApplyEdit {
-		return nil, fmt.Errorf("%w: %s", client.ErrMethodNotFound, method)
-	}
-	if c == nil {
-		return map[string]any{
-			"applied":       false,
-			"failureReason": "lightspeed applies edits only as part of the command it was asked to run",
-		}, nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.armed {
-		return map[string]any{
-			"applied":       false,
-			"failureReason": "lightspeed applies edits only as part of the command it was asked to run",
-		}, nil
-	}
-	var req struct {
-		Label string          `json:"label"`
-		Edit  json.RawMessage `json:"edit"`
-	}
-	if err := json.Unmarshal(params, &req); err != nil {
-		return map[string]any{"applied": false, "failureReason": "malformed applyEdit params"}, nil
-	}
-	c.edits = append(c.edits, req.Edit)
-	c.labels = append(c.labels, req.Label)
-	// "applied" here means the client has taken responsibility for the
-	// edit, which it has: it is staged and will be written or shown.
-	// Saying false would make a server believe its own command failed.
-	return map[string]any{"applied": true}, nil
-}
-
-// collected returns the single WorkspaceEdit the server pushed.
+// back as workspace/applyEdit requests. The session records them for
+// the length of that one request (daemon.Request.CollectEdits) and
+// refuses them at any other time — we advertise workspace/applyEdit
+// because a command we ran may need it, not as a standing invitation
+// for a server to rewrite the tree — and everything recorded goes
+// through the same transactional applier as every other edit.
 //
 // More than one is refused rather than merged. Two edit sets computed
 // against the same starting state cannot be composed without knowing
@@ -349,18 +287,20 @@ func (c *editCollector) handle(_ context.Context, method string, params json.Raw
 // lightspeed targets sends more than one per command; if that changes,
 // the fix is to teach internal/edit to stage a sequence, not to paper
 // over it here.
-func (c *editCollector) collected() (json.RawMessage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	switch len(c.edits) {
+func collectedEdit(pushed []daemon.PushedEdit) (json.RawMessage, error) {
+	switch len(pushed) {
 	case 0:
 		return nil, nil
 	case 1:
-		return c.edits[0], nil
+		return pushed[0].Edit, nil
 	default:
+		labels := make([]string, len(pushed))
+		for i, p := range pushed {
+			labels[i] = p.Label
+		}
 		return nil, render.Errorf(render.CodeEditConflict,
 			"the server pushed %d separate workspace edits (%s); lightspeed applies one edit set per command, and applying part of them is not something it will do",
-			len(c.edits), joinLabels(c.labels))
+			len(pushed), joinLabels(labels))
 	}
 }
 

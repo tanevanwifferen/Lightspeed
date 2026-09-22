@@ -230,7 +230,7 @@ func TestCheckTextFormat(t *testing.T) {
 	if code != ExitProblems {
 		t.Fatalf("exit code = %d, want %d; stderr: %s", code, ExitProblems, stderr)
 	}
-	want := "cjk.go:6:9: error: undefined: 変数 [compiler:UndeclaredName]\n"
+	want := "cjk.go:6:9: error: undefined: 変数 [compiler:UndeclaredName]\n# paths are relative to " + dir + "\n"
 	if stdout != want {
 		t.Errorf("text output\n got: %q\nwant: %q", stdout, want)
 	}

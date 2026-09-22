@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/render"
 )
@@ -15,13 +16,13 @@ import (
 // because that is what a caller greps for and what distinguishes two
 // methods with the same name. The source line is still carried in the
 // JSON payload; the label only replaces it in text output.
-func symbolSet(s *session, kind string, syms []symbol) (render.ResultSet, []string) {
+func symbolSet(s *session, kind string, syms []symbol, ids []string) (render.ResultSet, []string) {
 	rs := render.ResultSet{Kind: kind, Results: make([]render.Result, 0, len(syms))}
 	var (
 		warnings  []string
 		unlocated int
 	)
-	for _, sym := range syms {
+	for i, sym := range syms {
 		m, err := s.docs.MapperForURI(sym.URI)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("dropped symbol %q in %s: %v", sym.Qualified, sym.URI, err))
@@ -35,7 +36,12 @@ func symbolSet(s *session, kind string, syms []symbol) (render.ResultSet, []stri
 		if !sym.HasRange {
 			unlocated++
 		}
+		var id string
+		if i < len(ids) {
+			id = ids[i]
+		}
 		rs.Results = append(rs.Results, render.Result{
+			ID:     id,
 			Span:   span,
 			Kind:   sym.Kind,
 			Detail: sym.Detail,
@@ -56,7 +62,10 @@ func symbolSet(s *session, kind string, syms []symbol) (render.ResultSet, []stri
 // a hierarchical DocumentSymbol answer is flattened depth-first, so a
 // method follows the type it belongs to, which is how the file reads.
 func symbolsCommand(e *env, c *command, args []string) int {
-	common, positional, err := parseFlags(e, c, args, 1, nil)
+	var anchor string
+	common, positional, err := parseFlags(e, c, args, 1, func(fs *flag.FlagSet) {
+		fs.StringVar(&anchor, "path", ".", "directory whose workspace the symbol ids are relative to")
+	})
 	if err != nil {
 		return e.flagError(err)
 	}
@@ -75,12 +84,12 @@ func symbolsCommand(e *env, c *command, args []string) int {
 	if err := mustBeFile(path); err != nil {
 		return e.fail(err)
 	}
-	match, err := resolveTarget(path, "", common.server)
+	match, err := e.resolveTarget(path, "", common.server)
 	if err != nil {
 		return e.fail(err)
 	}
 
-	connectCtx, cancelConnect := context.WithTimeout(context.Background(), common.timeout)
+	connectCtx, cancelConnect := context.WithTimeout(e.base(), common.timeout)
 	defer cancelConnect()
 	s, err := startSession(connectCtx, e, match, common.gateOptions())
 	if err != nil {
@@ -93,7 +102,7 @@ func symbolsCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), common.timeout+gateSlack)
+	ctx, cancel := context.WithTimeout(e.base(), common.timeout+gateSlack)
 	defer cancel()
 	res, err := s.query(ctx, c.Method, map[string]any{
 		"textDocument": map[string]any{"uri": string(doc.URI)},
@@ -102,12 +111,19 @@ func symbolsCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	syms, err := decodeDocumentSymbols(res.Result, doc.URI)
+	syms, pinWarnings, err := decodeFileSymbols(res.Result, doc)
 	if err != nil {
 		return e.fail(err)
 	}
-	rs, warnings := symbolSet(s, "symbols", syms)
-	return e.writeResults(format, rs, common.renderOptions(append(res.Warnings, warnings...)))
+	// Ids are relative to the workspace, so a file outside it has none.
+	var ids []string
+	if root, err := commandWorkspace(anchor); err != nil {
+		return e.fail(err)
+	} else if rel, in := relToRoot(root, path); in {
+		ids = symbolIDs(rel, syms)
+	}
+	rs, warnings := symbolSet(s, "symbols", syms, ids)
+	return e.writeResults(format, rs, common.renderOptions(s.match.Root, append(append(res.Warnings, pinWarnings...), warnings...)))
 }
 
 // workspaceSymbolCommand implements
@@ -141,12 +157,12 @@ func workspaceSymbolCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 
-	match, err := resolveWorkspace(path, language, common.server)
+	match, err := e.resolveWorkspace(path, language, common.server)
 	if err != nil {
 		return e.fail(err)
 	}
 
-	connectCtx, cancelConnect := context.WithTimeout(context.Background(), common.timeout)
+	connectCtx, cancelConnect := context.WithTimeout(e.base(), common.timeout)
 	defer cancelConnect()
 	s, err := startSession(connectCtx, e, match, common.gateOptions())
 	if err != nil {
@@ -154,7 +170,7 @@ func workspaceSymbolCommand(e *env, c *command, args []string) int {
 	}
 	defer s.close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), common.timeout+gateSlack)
+	ctx, cancel := context.WithTimeout(e.base(), common.timeout+gateSlack)
 	defer cancel()
 	res, err := s.query(ctx, c.Method, map[string]any{"query": positional[0]})
 	if err != nil {
@@ -165,6 +181,19 @@ func workspaceSymbolCommand(e *env, c *command, args []string) int {
 	if err != nil {
 		return e.fail(err)
 	}
-	rs, warnings := symbolSet(s, "workspace_symbol", syms)
-	return e.writeResults(format, rs, common.renderOptions(append(res.Warnings, warnings...)))
+	// Ids need each result's file outlined (a `~N` suffix depends on every
+	// duplicate in it), which idIndex does, within limits it reports.
+	root, err := commandWorkspace(path)
+	if err != nil {
+		return e.fail(err)
+	}
+	index := newIDIndex(e, s, root)
+	ids := make([]string, len(syms))
+	for i, sym := range syms {
+		if sym.HasRange {
+			ids[i] = index.idAt(sym.URI, sym.Range)
+		}
+	}
+	rs, warnings := symbolSet(s, "workspace_symbol", syms, ids)
+	return e.writeResults(format, rs, common.renderOptions(s.match.Root, slices.Concat(res.Warnings, warnings, index.summary())))
 }

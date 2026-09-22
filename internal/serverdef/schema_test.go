@@ -58,7 +58,7 @@ func TestSchemaMatchesTheParser(t *testing.T) {
 	// The top level, which additionally carries schema_version, name
 	// and the multi-server table.
 	top := propertyNames(t, schema)
-	want := slices.Sorted(slices.Values([]string{"schema_version", "name", "servers", "activation", "server", "install"}))
+	want := slices.Sorted(slices.Values([]string{"schema_version", "name", "servers", "activation", "server", "install", "dead_code"}))
 	if !slices.Equal(top, want) {
 		t.Errorf("schema top level describes %v, but the parser accepts %v", top, want)
 	}

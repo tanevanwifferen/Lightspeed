@@ -2,7 +2,6 @@ package cli
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,6 +58,7 @@ func loc(file string, line, startChar, endChar int) map[string]any {
 type resultsPayload struct {
 	Kind    string `json:"kind"`
 	Results []struct {
+		ID     string `json:"id"`
 		Path   string `json:"path"`
 		Kind   string `json:"kind"`
 		Label  string `json:"label"`
@@ -79,10 +79,11 @@ type resultsPayload struct {
 			Text string `json:"text"`
 		} `json:"after"`
 	} `json:"results"`
-	Count     int  `json:"count"`
-	Total     int  `json:"total"`
-	Truncated bool `json:"truncated"`
-	Limit     int  `json:"limit"`
+	Count     int    `json:"count"`
+	Total     int    `json:"total"`
+	Truncated bool   `json:"truncated"`
+	Limit     int    `json:"limit"`
+	Root      string `json:"root"`
 }
 
 func decodeResults(t *testing.T, stdout string) resultsPayload {
@@ -120,18 +121,22 @@ func TestReferencesOnCJKFixtureIsByteExact(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d; stderr: %s", code, ExitOK, stderr)
 	}
+	// Paths are relative to the workspace root, and the text says so because
+	// this test does not run in it (D30).
 	want := strings.Join([]string{
-		fmt.Sprintf("%s:3:5: var 変数 = 1", file),
-		fmt.Sprintf("%s:6:9: \treturn 変数 + 変数", file),
-		fmt.Sprintf("%s:6:18: \treturn 変数 + 変数", file),
+		"cjk.go:3:5: var 変数 = 1",
+		"cjk.go:6:9: \treturn 変数 + 変数",
+		"cjk.go:6:18: \treturn 変数 + 変数",
+		"# paths are relative to " + filepath.Dir(file),
 		"",
 	}, "\n")
 	if stdout != want {
 		t.Errorf("text output mismatch\n got: %q\nwant: %q", stdout, want)
 	}
 
-	// The JSON payload must agree, down to the byte offsets.
-	code, stdout, stderr = runMain("references", file+":3:5")
+	// The JSON payload must agree, down to the byte offsets
+	// (--verbose-locations restores them; docs/DECISIONS.md D45).
+	code, stdout, stderr = runMain("references", file+":3:5", "--verbose-locations")
 	if code != ExitOK {
 		t.Fatalf("exit code = %d, want %d; stderr: %s", code, ExitOK, stderr)
 	}
@@ -152,8 +157,8 @@ func TestReferencesOnCJKFixtureIsByteExact(t *testing.T) {
 		if gotStart != w.start || gotEnd != w.end {
 			t.Errorf("result %d = %v-%v, want %v-%v", i, gotStart, gotEnd, w.start, w.end)
 		}
-		if r.Path != file {
-			t.Errorf("result %d path = %q, want %q", i, r.Path, file)
+		if r.Path != "cjk.go" {
+			t.Errorf("result %d path = %q, want cjk.go, relative to data.root", i, r.Path)
 		}
 	}
 }
@@ -172,7 +177,8 @@ func TestLocationRoundTripsThroughUTF16(t *testing.T) {
 		file + ":6:18", // byte column: the second 変数 on the line
 		file + ":#66",  // the same place, as a byte offset
 	} {
-		code, stdout, stderr := runMain("definition", arg)
+		// --verbose-locations restores the offset this test checks (D45).
+		code, stdout, stderr := runMain("definition", arg, "--verbose-locations")
 		if code != ExitOK {
 			t.Fatalf("%s: exit code = %d, want %d; stderr: %s", arg, code, ExitOK, stderr)
 		}
@@ -308,8 +314,15 @@ func TestHover(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("text: exit code = %d, want %d", code, ExitOK)
 	}
-	if lines := strings.Count(strings.TrimSuffix(stdout, "\n"), "\n"); lines != 0 {
-		t.Errorf("text output is %d lines, want 1: %q", lines+1, stdout)
+	// (a `#` notice about the paths is not a result)
+	var resultLines []string
+	for _, l := range strings.Split(strings.TrimSuffix(stdout, "\n"), "\n") {
+		if !strings.HasPrefix(l, "# ") {
+			resultLines = append(resultLines, l)
+		}
+	}
+	if len(resultLines) != 1 {
+		t.Errorf("text output is %d result lines, want 1: %q", len(resultLines), stdout)
 	}
 	if !strings.Contains(stdout, `var 変数 int\n\nthe variable`) {
 		t.Errorf("text output lost the hover body: %q", stdout)
@@ -645,7 +658,8 @@ func TestNoServerForUnknownLanguage(t *testing.T) {
 // implicitly).
 func TestServerNotInstalled(t *testing.T) {
 	_, file := cjkFixture(t)
-	t.Setenv(serverCommandEnv, "lightspeed-definitely-not-installed")
+	useServerCommand(t, "lightspeed-definitely-not-installed")
+	t.Setenv("PATH", t.TempDir()) // nothing to find, and no mise to ask
 
 	code, stdout, _ := runMain("definition", file+":3:5")
 	if code != ExitNoServer {

@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/docstore"
 	goplscmd "github.com/tanevanwifferen/Lightspeed/internal/gopls/cmd"
@@ -46,6 +48,7 @@ func checkResultsFormat(f render.Format) error {
 // tool worked and matched nothing". The two must never be conflated,
 // which is the whole point of PLAN §5.2.
 func (e *env) writeResults(f render.Format, rs render.ResultSet, opts render.Options) int {
+	opts = e.rootNote(f, opts)
 	if err := render.Results(e.stdout, f, rs, opts); err != nil {
 		return e.fail(err)
 	}
@@ -53,6 +56,34 @@ func (e *env) writeResults(f render.Format, rs render.ResultSet, opts render.Opt
 		return render.ExitProblems
 	}
 	return render.ExitOK
+}
+
+// rootNote says, in text output, what its relative paths are relative to when
+// that is not the directory the command ran in. Text has no envelope to carry
+// the root the way JSON's data.root does, and a line of it on every answer
+// would be paid for by every caller, so it appears only when it is needed:
+// the paths do not resolve from where the caller is (docs/DECISIONS.md D30).
+func (e *env) rootNote(f render.Format, opts render.Options) render.Options {
+	if f != render.FormatText || opts.Root == "" {
+		return opts
+	}
+	cwd, err := os.Getwd()
+	if err == nil && sameDir(cwd, opts.Root) {
+		return opts
+	}
+	opts.Warnings = append(slices.Clone(opts.Warnings), "paths are relative to "+opts.Root)
+	return opts
+}
+
+// sameDir reports whether two paths name the same directory, symlinks and
+// all.
+func sameDir(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }
 
 // positionFor converts a parsed command-line point into the UTF-16 LSP
@@ -156,12 +187,12 @@ func prepareWith(e *env, common *commonFlags, arg string, sopts sessionOptions) 
 		return nil, noop, err
 	}
 
-	match, err := resolveTarget(path, "", common.server)
+	match, err := e.resolveTarget(path, "", common.server)
 	if err != nil {
 		return nil, noop, err
 	}
 
-	connectCtx, cancel := context.WithTimeout(context.Background(), common.timeout)
+	connectCtx, cancel := context.WithTimeout(e.base(), common.timeout)
 	defer cancel()
 	s, err := startSessionWith(connectCtx, e, match, sopts)
 	if err != nil {
@@ -183,7 +214,7 @@ func prepareWith(e *env, common *commonFlags, arg string, sopts sessionOptions) 
 // queryContext bounds a gated request. It is deliberately looser than
 // --timeout: see gateSlack.
 func (q *locationQuery) queryContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), q.common.timeout+gateSlack)
+	return context.WithTimeout(q.session.base, q.common.timeout+gateSlack)
 }
 
 // locationCommand implements definition, references and implementation,
@@ -241,7 +272,7 @@ func locationCommand(e *env, c *command, args []string) int {
 	rs, locWarnings := locationSet(q.session, name, locs)
 	rs.Sort()
 	warnings = append(warnings, res.Warnings...)
-	return e.writeResults(format, rs, common.renderOptions(append(warnings, locWarnings...)))
+	return e.writeResults(format, rs, common.renderOptions(q.session.match.Root, append(warnings, locWarnings...)))
 }
 
 // hoverCommand implements `lightspeed hover <loc>`: the signature and
@@ -302,5 +333,5 @@ func hoverCommand(e *env, c *command, args []string) int {
 		}
 		rs.Results = append(rs.Results, render.Result{Span: span, Kind: "hover", Label: text})
 	}
-	return e.writeResults(format, rs, common.renderOptions(append(warnings, res.Warnings...)))
+	return e.writeResults(format, rs, common.renderOptions(q.session.match.Root, append(warnings, res.Warnings...)))
 }

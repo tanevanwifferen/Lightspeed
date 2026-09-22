@@ -73,8 +73,7 @@ func renameCommand(e *env, c *command, args []string) int {
 		}
 	}
 
-	var collector editCollector
-	q, cleanup, err := prepareWith(e, common, locArg, mutationSession(common, &collector))
+	q, cleanup, err := prepareWith(e, common, locArg, mutationSession(common))
 	defer cleanup()
 	if err != nil {
 		return e.fail(err)
@@ -112,9 +111,10 @@ func renameCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 	return e.writeMutation(&mf, editOutcome{
-		tx:     tx,
-		format: format,
-		opts:   common.renderOptions(warnings),
+		session: q.session,
+		tx:      tx,
+		format:  format,
+		opts:    common.renderOptions(q.session.match.Root, warnings),
 		// A rename that changes nothing renamed nothing. That is a
 		// failed intent, not a satisfied one.
 		emptyIsProblem: true,

@@ -141,6 +141,39 @@ func NewGate(progress *ProgressTracker, opts GateOptions) *Gate {
 // Options reports the gate's effective options.
 func (g *Gate) Options() GateOptions { return g.opts }
 
+// With returns a gate over the same progress tracker and the same
+// session start, whose options are this gate's with every non-zero
+// field of o laid over them.
+//
+// It exists because a pooled session outlives the command that
+// happened to start it (PLAN §3): --timeout and --settle belong to
+// each query, not to the session, and a session created for a command
+// that said `--timeout 5s` must not hand the next one a five-second
+// budget it never asked for. Sharing the tracker and `created` is what
+// keeps the derived gate honest — its no-progress grace is still
+// measured from the handshake, not from the query.
+func (g *Gate) With(o GateOptions) *Gate {
+	merged := g.opts
+	if o.Settle > 0 {
+		merged.Settle = o.Settle
+	}
+	if o.NoProgressGrace > 0 {
+		merged.NoProgressGrace = o.NoProgressGrace
+	}
+	if o.PollInterval > 0 {
+		merged.PollInterval = o.PollInterval
+	}
+	if o.Timeout > 0 {
+		merged.Timeout = o.Timeout
+	}
+	if o.Clock != nil {
+		merged.Clock = o.Clock
+	}
+	clone := *g
+	clone.opts = merged
+	return &clone
+}
+
 // Progress reports the gate's progress tracker.
 func (g *Gate) Progress() *ProgressTracker { return g.progress }
 
@@ -396,3 +429,7 @@ func isRetryable(err error) bool {
 	}
 	return false
 }
+
+// IsRetryable reports whether a server error means "the state moved, ask
+// again" (content modified, server cancelled) rather than "no".
+func IsRetryable(err error) bool { return isRetryable(err) }

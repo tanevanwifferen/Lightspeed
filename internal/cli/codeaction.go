@@ -73,8 +73,7 @@ func codeActionCommand(e *env, c *command, args []string) int {
 		}
 	}
 
-	var collector editCollector
-	q, cleanup, err := prepareWith(e, common, arg, mutationSession(common, &collector))
+	q, cleanup, err := prepareWith(e, common, arg, mutationSession(common))
 	defer cleanup()
 	if err != nil {
 		return e.fail(err)
@@ -112,14 +111,14 @@ func codeActionCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 	if !chosen {
-		return e.listCodeActions(q, format, rng, actions, common.renderOptions(warnings))
+		return e.listCodeActions(q, format, rng, actions, common.renderOptions(q.session.match.Root, warnings))
 	}
 
 	action, err := selectCodeAction(actions, index, title)
 	if err != nil {
 		return e.fail(err)
 	}
-	raw, notes, err := resolveActionEdit(q, &collector, action)
+	raw, notes, err := resolveActionEdit(q, action)
 	warnings = append(warnings, notes...)
 	if err != nil {
 		return e.fail(err)
@@ -130,9 +129,10 @@ func codeActionCommand(e *env, c *command, args []string) int {
 		return e.fail(err)
 	}
 	return e.writeMutation(&mf, editOutcome{
-		tx:     tx,
-		format: format,
-		opts:   common.renderOptions(warnings),
+		session: q.session,
+		tx:      tx,
+		format:  format,
+		opts:    common.renderOptions(q.session.match.Root, warnings),
 		// An action that changes no file may still have done its job
 		// server-side; the warning above says so. Reporting it as a
 		// problem would be guessing.
@@ -377,7 +377,7 @@ func listTitles(actions []codeAction) string {
 // command has run, so a *preview* has to run it too — and a server
 // command may do things outside the files we are about to show. That
 // cannot be hidden, so it is warned about instead.
-func resolveActionEdit(q *locationQuery, collector *editCollector, action *codeAction) (json.RawMessage, []string, error) {
+func resolveActionEdit(q *locationQuery, action *codeAction) (json.RawMessage, []string, error) {
 	var warnings []string
 
 	if action.Edit != nil && action.Command != nil {
@@ -430,14 +430,13 @@ func resolveActionEdit(q *locationQuery, collector *editCollector, action *codeA
 		"the action %q had no edit of its own; it was produced by running the server command %q, which may have had effects beyond the files shown here",
 		action.Title, name))
 
-	collector.arm()
-	defer collector.disarm()
 	ctx, cancel := q.queryContext()
 	defer cancel()
-	if _, err := q.session.call(ctx, methodExecuteCommand, params); err != nil {
+	_, pushed, err := q.session.callCollecting(ctx, methodExecuteCommand, params)
+	if err != nil {
 		return nil, warnings, err
 	}
-	raw, err := collector.collected()
+	raw, err := collectedEdit(pushed)
 	if err != nil {
 		return nil, warnings, err
 	}

@@ -10,14 +10,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tanevanwifferen/Lightspeed/internal/client"
+	"github.com/tanevanwifferen/Lightspeed/internal/daemon"
 	"github.com/tanevanwifferen/Lightspeed/internal/gopls/protocol"
 	"github.com/tanevanwifferen/Lightspeed/internal/render"
 	"github.com/tanevanwifferen/Lightspeed/internal/router"
-	"github.com/tanevanwifferen/Lightspeed/internal/serverdef"
 )
 
 // `lightspeed check [path...]` — diagnostics, and the one command in
@@ -119,19 +118,14 @@ func checkCommand(e *env, c *command, args []string) int {
 	if len(targets) == 0 {
 		targets = []string{"."}
 	}
-	files, match, warnings, err := checkTargets(targets, language, common.server, maxFiles)
+	files, match, warnings, err := checkTargets(e, targets, language, common.server, maxFiles)
 	if err != nil {
 		return e.fail(err)
 	}
 
-	collector := newDiagnosticsCollector()
-	connectCtx, cancelConnect := context.WithTimeout(context.Background(), common.timeout)
+	connectCtx, cancelConnect := context.WithTimeout(e.base(), common.timeout)
 	defer cancelConnect()
-	s, err := startSessionWith(connectCtx, e, match, sessionOptions{
-		gate:           common.gateOptions(),
-		capabilities:   checkCapabilities(),
-		onNotification: collector.handle,
-	})
+	s, err := startSessionWith(connectCtx, e, match, sessionOptions{gate: common.gateOptions()})
 	if err != nil {
 		return e.fail(err)
 	}
@@ -157,7 +151,7 @@ func checkCommand(e *env, c *command, args []string) int {
 	if pull {
 		byURI, notes, err = pullDiagnostics(s, common, uris)
 	} else {
-		byURI, notes, err = pushDiagnostics(s, common, collector, uris, allowSilent)
+		byURI, notes, err = pushDiagnostics(s, common, uris, allowSilent)
 	}
 	warnings = append(warnings, notes...)
 	if err != nil {
@@ -174,11 +168,10 @@ func checkCommand(e *env, c *command, args []string) int {
 	// pass CI.
 	problems := ds.HasErrors()
 
-	opts := common.renderOptions(warnings)
 	// Diagnostics are workspace-wide, so paths are reported relative
 	// to the workspace root — shorter output, and a SARIF run that
 	// says what its URIs are relative to.
-	opts.Root = match.Root
+	opts := e.rootNote(format, common.renderOptions(match.Root, warnings))
 	if err := render.Diagnostics(e.stdout, format, ds, opts); err != nil {
 		return e.fail(err)
 	}
@@ -246,18 +239,12 @@ type checkFile struct {
 	languageID string
 }
 
-func checkTargets(targets []string, language, serverName string, maxFiles int) (
+func checkTargets(e *env, targets []string, language, serverName string, maxFiles int) (
 	[]checkFile, router.Match, []string, error) {
 	var (
 		none     router.Match
 		warnings []string
 	)
-	r, err := router.New(serverdef.Builtins()...)
-	if err != nil {
-		return nil, none, nil, render.Errorf(render.CodeInternal,
-			"built-in server definitions are invalid: %v", err)
-	}
-
 	seen := map[string]bool{}
 	var candidates []string
 	for _, target := range targets {
@@ -276,7 +263,14 @@ func checkTargets(targets []string, language, serverName string, maxFiles int) (
 			}
 			continue
 		}
-		found, err := sourceFiles(r, abs)
+		// Each directory is listed with the definitions of its own
+		// workspace, which is the router resolveTarget will use for the
+		// files found in it.
+		cfg, err := e.workspaceConfig(abs)
+		if err != nil {
+			return nil, none, nil, err
+		}
+		found, err := sourceFiles(cfg.router, abs)
 		if err != nil {
 			return nil, none, nil, err
 		}
@@ -294,14 +288,14 @@ func checkTargets(targets []string, language, serverName string, maxFiles int) (
 	}
 	slices.Sort(candidates)
 
-	match, err := resolveTarget(candidates[0], language, serverName)
+	match, err := e.resolveTarget(candidates[0], language, serverName)
 	if err != nil {
 		return nil, none, nil, err
 	}
 	files := make([]checkFile, 0, len(candidates))
 	elsewhere := 0
 	for _, path := range candidates {
-		m, err := resolveTarget(path, language, serverName)
+		m, err := e.resolveTarget(path, language, serverName)
 		if err != nil || m.Server.Name != match.Server.Name || m.Root != match.Root {
 			elsewhere++
 			continue
@@ -368,7 +362,7 @@ func pullDiagnostics(s *session, common *commonFlags, uris []protocol.DocumentUR
 	byURI := map[protocol.DocumentURI][]lspDiagnostic{}
 	var warnings []string
 	for _, uri := range uris {
-		ctx, cancel := context.WithTimeout(context.Background(), common.timeout+gateSlack)
+		ctx, cancel := context.WithTimeout(s.base, common.timeout+gateSlack)
 		res, err := s.query(ctx, methodDocumentDiagnostic, map[string]any{
 			"textDocument": map[string]any{"uri": string(uri)},
 		})
@@ -396,7 +390,7 @@ func pullDiagnostics(s *session, common *commonFlags, uris []protocol.DocumentUR
 
 // pushDiagnostics collects diagnostics from publishDiagnostics, and
 // decides when they are all in. See the rule at the top of this file.
-func pushDiagnostics(s *session, common *commonFlags, collector *diagnosticsCollector,
+func pushDiagnostics(s *session, common *commonFlags,
 	uris []protocol.DocumentURI, allowSilent bool) (
 	map[protocol.DocumentURI][]lspDiagnostic, []string, error) {
 	var warnings []string
@@ -404,7 +398,7 @@ func pushDiagnostics(s *session, common *commonFlags, collector *diagnosticsColl
 	// Condition (1): the same readiness question every other command
 	// asks, answered by the same gate. A workspace that never loads is
 	// exit 5 here exactly as it is for `references`.
-	readyCtx, cancelReady := context.WithTimeout(context.Background(), common.timeout+gateSlack)
+	readyCtx, cancelReady := context.WithTimeout(s.base, common.timeout+gateSlack)
 	err := s.lsp.AwaitReady(readyCtx)
 	cancelReady()
 	if err != nil {
@@ -414,17 +408,35 @@ func pushDiagnostics(s *session, common *commonFlags, collector *diagnosticsColl
 	// Conditions (2) and (3).
 	settle := common.settle
 	deadline := time.Now().Add(common.timeout)
-	var missing []protocol.DocumentURI
+	var (
+		missing   []protocol.DocumentURI
+		publishes int
+	)
 	for {
-		missing = collector.missing(uris)
-		if len(missing) == 0 && collector.quietFor(settle) {
-			return collector.snapshot(), warnings, nil
+		st, err := s.diagnosticsState(uris, false)
+		if err != nil {
+			return nil, warnings, err
+		}
+		missing = missing[:0]
+		for _, raw := range st.Missing {
+			missing = append(missing, protocol.DocumentURI(raw))
+		}
+		publishes = st.Publishes
+		// Silence before the first word is not the same as silence
+		// after the last: a session that has published nothing at all
+		// is not quiet, it is unheard from.
+		if len(missing) == 0 && st.Publishes > 0 && st.Quiet >= settle {
+			return snapshotDiagnostics(s, uris, warnings)
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			break
 		}
-		time.Sleep(min(checkPollInterval, remaining))
+		select {
+		case <-time.After(min(checkPollInterval, remaining)):
+		case <-s.base.Done():
+			return nil, warnings, s.translate(methodPublishDiagnostics, s.base.Err())
+		}
 	}
 
 	if len(missing) == 0 {
@@ -433,7 +445,7 @@ func pushDiagnostics(s *session, common *commonFlags, collector *diagnosticsColl
 		return nil, warnings, render.Errorf(render.CodeNotReady,
 			"%s kept publishing diagnostics for %s without pausing for %s; the report never settled",
 			s.match.Server.Name, common.timeout, settle).
-			WithDetails(map[string]any{"reason": "unstable", "publishes": collector.count()})
+			WithDetails(map[string]any{"reason": "unstable", "publishes": publishes})
 	}
 
 	names := shortPaths(missing)
@@ -441,7 +453,7 @@ func pushDiagnostics(s *session, common *commonFlags, collector *diagnosticsColl
 		warnings = append(warnings, fmt.Sprintf(
 			"%s never published diagnostics for %d file(s) (%s); --allow-silent means they are reported as clean, which is an assumption and not an answer",
 			s.match.Server.Name, len(missing), strings.Join(names, ", ")))
-		return collector.snapshot(), warnings, nil
+		return snapshotDiagnostics(s, uris, warnings)
 	}
 	return nil, warnings, render.Errorf(render.CodeNotReady,
 		"%s published no diagnostics for %d of %d file(s) (%s) within %s; a file the server never mentioned is unknown, not clean — pass --allow-silent to accept the silence, or --timeout to wait longer",
@@ -451,6 +463,17 @@ func pushDiagnostics(s *session, common *commonFlags, collector *diagnosticsColl
 			"silent":  names,
 			"checked": len(uris),
 		})
+}
+
+// snapshotDiagnostics reads out everything the session has published.
+func snapshotDiagnostics(s *session, uris []protocol.DocumentURI, warnings []string) (
+	map[protocol.DocumentURI][]lspDiagnostic, []string, error) {
+	st, err := s.diagnosticsState(uris, true)
+	if err != nil {
+		return nil, warnings, err
+	}
+	byURI, err := decodeDiagnosticsSnapshot(st)
+	return byURI, warnings, err
 }
 
 // shortPaths renders URIs as paths a caller would recognise, capped so
@@ -605,90 +628,39 @@ func decodeDiagnosticReport(raw json.RawMessage, uri protocol.DocumentURI) (
 	return out, nil
 }
 
-// diagnosticsCollector accumulates textDocument/publishDiagnostics.
-//
-// Its handler runs on the connection's read loop, so it holds the lock
-// only long enough to store the notification, and every question the
-// waiting command asks is answered from the same lock. A publish
-// *replaces* the file's set, per the protocol: a server clearing a
-// file's diagnostics sends an empty array, and appending would make
-// fixed errors immortal.
-type diagnosticsCollector struct {
-	mu    sync.Mutex
-	byURI map[protocol.DocumentURI][]lspDiagnostic
-	// last is when the most recent publish arrived, and publishes how
-	// many there have been: together they are the stability evidence.
-	last      time.Time
-	publishes int
-}
-
-func newDiagnosticsCollector() *diagnosticsCollector {
-	return &diagnosticsCollector{byURI: map[protocol.DocumentURI][]lspDiagnostic{}}
-}
-
-// handle implements client.NotificationHandler.
-func (c *diagnosticsCollector) handle(method string, params json.RawMessage) {
-	if method != methodPublishDiagnostics {
-		return
+// diagnosticsState asks the pool what the session's server has
+// published about some files. The record lives with the session — in
+// the daemon, that outlives this command — and not here, because
+// diagnostics are pushed whenever the server likes and a warm server
+// has already said most of what it is going to say.
+func (s *session) diagnosticsState(uris []protocol.DocumentURI, snapshot bool) (*daemon.DiagnosticsState, error) {
+	names := make([]string, len(uris))
+	for i, uri := range uris {
+		names[i] = string(uri)
 	}
-	var pp struct {
-		URI         string          `json:"uri"`
-		Diagnostics []lspDiagnostic `json:"diagnostics"`
-	}
-	if err := json.Unmarshal(params, &pp); err != nil || pp.URI == "" {
-		return // a malformed notification must not wedge the wait
-	}
-	uri, err := protocol.ParseDocumentURI(pp.URI)
+	ctx, cancel := s.requestContext()
+	defer cancel()
+	st, err := s.h.Diagnostics(ctx, daemon.DiagnosticsRequest{Target: s.target, URIs: names, Snapshot: snapshot})
 	if err != nil {
-		return
+		return nil, s.translate(methodPublishDiagnostics, err)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.byURI[uri] = pp.Diagnostics
-	c.last = time.Now()
-	c.publishes++
+	return st, nil
 }
 
-// missing lists the URIs the server has said nothing about, in the
-// order they were asked about.
-func (c *diagnosticsCollector) missing(uris []protocol.DocumentURI) []protocol.DocumentURI {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var out []protocol.DocumentURI
-	for _, uri := range uris {
-		if _, ok := c.byURI[uri]; !ok {
-			out = append(out, uri)
+// decodeDiagnosticsSnapshot decodes everything the session has been
+// told, one array per file.
+func decodeDiagnosticsSnapshot(st *daemon.DiagnosticsState) (map[protocol.DocumentURI][]lspDiagnostic, error) {
+	out := make(map[protocol.DocumentURI][]lspDiagnostic, len(st.ByURI))
+	for raw, diags := range st.ByURI {
+		uri, err := protocol.ParseDocumentURI(raw)
+		if err != nil {
+			continue
 		}
+		var decoded []lspDiagnostic
+		if err := json.Unmarshal(diags, &decoded); err != nil {
+			return nil, protocolError("publishDiagnostics", err)
+		}
+		out[uri] = decoded
 	}
-	return out
-}
-
-// quietFor reports whether no publish has arrived for d. A collector
-// that has never received anything is not quiet: silence before the
-// first word is not the same as silence after the last.
-func (c *diagnosticsCollector) quietFor(d time.Duration) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.publishes == 0 {
-		return false
-	}
-	return time.Since(c.last) >= d
-}
-
-// count reports how many publishes have arrived.
-func (c *diagnosticsCollector) count() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.publishes
-}
-
-// snapshot copies out everything published so far.
-func (c *diagnosticsCollector) snapshot() map[protocol.DocumentURI][]lspDiagnostic {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make(map[protocol.DocumentURI][]lspDiagnostic, len(c.byURI))
-	for uri, diags := range c.byURI {
-		out[uri] = slices.Clone(diags)
-	}
-	return out
+	return out, nil
 }

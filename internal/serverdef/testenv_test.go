@@ -25,6 +25,11 @@ type testEnv struct {
 	// that unexpectedly shells out should fail, not succeed slowly.
 	Runner Runner
 
+	// Starter, if set, replaces the start probe of `servers` and `doctor`.
+	// Nil means every executable starts and exits 0, so that the tests that
+	// are not about it never run a fake binary.
+	Starter StartRunner
+
 	// Env records the environment of every command the test ran, in
 	// order, so that a test can assert what the child process was
 	// given and not only what it was called with.
@@ -127,7 +132,15 @@ func (e *testEnv) Options() Options {
 		Getenv:        e.getenv,
 		LookPath:      e.lookPath,
 		Run:           e.run,
+		Start:         e.start,
 	}
+}
+
+func (e *testEnv) start(ctx context.Context, dir string, env []string, path string, args ...string) (string, int, error) {
+	if e.Starter == nil {
+		return "", 0, nil
+	}
+	return e.Starter(ctx, dir, env, path, args...)
 }
 
 func (e *testEnv) getenv(key string) string { return e.Vars[key] }
