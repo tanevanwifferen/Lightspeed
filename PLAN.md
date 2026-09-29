@@ -14,7 +14,7 @@ command goes through the per-workspace daemon unless `--no-daemon` says
 otherwise, and resolves its server through the four layers of §6.
 `lightspeed servers`, `install` and `doctor` exist, and `lightspeed mcp` serves the
 command table to coding agents as MCP tools. See §8 for the
-per-milestone state and the deferrals. `README.md` is the user-facing manual and
+per-milestone state and the deferrals. `docs/REFERENCE.md` is the user-facing manual and
 records the same gaps.
 **Binary:** `lightspeed`
 **Language:** Go (≥1.26; the module is `go 1.27.0`)
