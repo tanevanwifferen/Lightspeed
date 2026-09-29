@@ -98,6 +98,49 @@ diff touched, the files that churn the most — but you get the idea. Every
 answer is structured JSON when a program is listening and readable text when a
 person is.
 
+## What it saves
+
+Every token an agent spends reading is a token it can't spend thinking, and a
+little closer to the edge of its context window. So we measured it: nine
+everyday questions about this repository, each answered twice. First the way an
+agent usually does it (open the file, grep for the name, list everything), then
+with the one Lightspeed call that answers the same question.
+
+| question | without | with Lightspeed | saved |
+|---|---:|---:|---:|
+| Read one method (`Pool.Acquire`) | 7,878 | 484 | 94% |
+| What is in this file? (`internal/cli/index.go`) | 13,120 | 2,369 | 82% |
+| A type, its docs and the file's imports (`Gate`) | 4,437 | 1,132 | 74% |
+| Where is the readiness gate implemented? | 4,702 | 777 | 83% |
+| Give me an overview of the repository | 2,605 | 714 | 73% |
+| What breaks if I change `edit.Apply`? | 1,101 | 658 | 40% |
+| Where is `ReapIdle` defined? | 647 | 594 | 8% |
+| Who imports `internal/render`? | 1,221 | 1,441 | −18% |
+| Who calls `Pool.Acquire`? | 848 | 1,429 | −69% |
+| **all nine** | **36,559** | **9,598** | **74%** |
+
+<sub>Approximate tokens (bytes ÷ 4), measured on this repository with gopls.
+Reproduce with `python3 docs/bench/savings.py`.</sub>
+
+The big wins all have the same cause: **you stop reading whole files.** An agent
+that wants one forty-line method usually opens the whole 850-line file around
+it. Lightspeed hands over the method and nothing else. Most of what an agent
+does is reading, so this is where the savings add up.
+
+The bottom of the table is worth a closer look, because Lightspeed isn't always
+cheaper. When the question is "who calls this?", a well-aimed `grep` returns
+about the same lines, and grep's plain text is more compact than Lightspeed's
+structured JSON, which carries exact positions an agent can act on. What you pay
+for there is accuracy. Grep also matches comments, strings and every other
+function that happens to share the name, and it can't tell a call to *this*
+`Apply` from a call to any other. The language server can. On a small, tidy
+codebase that difference is a few stray lines. On a large one it decides
+whether the answer is right.
+
+The "without" column is also generous to grep: it counts only the first step.
+In practice an agent that greps then opens several of the files it found, and
+those reads show up in the top rows of the table.
+
 ## Fast after the first question
 
 Language servers are slow to wake. rust-analyzer can spend a minute indexing a

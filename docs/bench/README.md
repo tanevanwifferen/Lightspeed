@@ -89,4 +89,5 @@ in `internal/cli/bench_test.go` and regenerate the baseline.
 |---|---|
 | `calls.py` | the eleven questions as lightspeed tool calls — `python3 calls.py <outdir>` writes `ls_calls.json`; a commented example shows how to add a second server's list |
 | `mcpbench.py` | drives one MCP server over stdio with a `calls.json`, prints byte sizes and timings, saves each answer's text to `<outdir>/<label>.txt` (not committed — a local run's scratch output) |
+| `savings.py` | the token-savings comparison in the top-level README: nine questions answered by reading files and grepping, then by lightspeed — `python3 docs/bench/savings.py` prints the table (`--json` for the numbers) |
 | `baseline.json` | the committed reference `make bench` checks new runs against: `[{"label","bytes","words"}, …]` |
